@@ -281,6 +281,56 @@ WIFI_ERROR_MESSAGE_t wifi_command_create_TCP_connection(char *IP, uint16_t port,
     return errorMessage;
 }
 
+WIFI_ERROR_MESSAGE_t wifi_command_get_mac(char *mac_address)
+{
+    uint16_t timeOut_s = 5;
+
+    void* callback_state = _callback;
+    _callback = wifi_command_callback;
+
+    uart_send_string_blocking(UART2_ID, "AT+CIFSR\r\n");
+
+    for (uint16_t i = 0; i < timeOut_s * 100UL; i++)
+    {
+        _delay_ms(10);
+        if (strstr((char *)wifi_dataBuffer, "OK\r\n") != NULL)
+            break;
+    }
+
+    WIFI_ERROR_MESSAGE_t error;
+
+    if (wifi_dataBufferIndex == 0)
+        error = WIFI_ERROR_NOT_RECEIVING;
+    else if (strstr((char *)wifi_dataBuffer, "OK") != NULL)
+        error = WIFI_OK;
+    else if (strstr((char *)wifi_dataBuffer, "ERROR") != NULL)
+        error = WIFI_ERROR_RECEIVED_ERROR;
+    else
+        error = WIFI_ERROR_RECEIVING_GARBAGE;
+
+    /* AT+CIFSR response contains a line like:
+       +CIFSR:STAMAC,"aa:bb:cc:dd:ee:ff"
+       Extract the MAC string between the quotes. */
+    if (error == WIFI_OK)
+    {
+        char *macStart = strstr((char *)wifi_dataBuffer, "STAMAC,\"");
+        if (macStart != NULL)
+        {
+            macStart += strlen("STAMAC,\"");
+            char *macEnd = strchr(macStart, '"');
+            if (macEnd != NULL && (macEnd - macStart) <= 17)
+            {
+                strncpy(mac_address, macStart, macEnd - macStart);
+                mac_address[macEnd - macStart] = '\0';
+            }
+        }
+    }
+
+    wifi_clear_databuffer_and_index();
+    _callback = callback_state;
+    return error;
+}
+
 WIFI_ERROR_MESSAGE_t wifi_command_TCP_transmit(uint8_t * data, uint16_t length)
 {
     char sendbuffer[128];

@@ -117,7 +117,16 @@ WIFI_ERROR_MESSAGE_t wifi_command_TCP_transmit(uint8_t *data, uint16_t length);
 WIFI_ERROR_MESSAGE_t wifi_command_quit_AP();
 
 /**
- * @brief  Closes thhe TCP connection
+ * @brief  Closes the TCP connection
  * @return WIFI_ERROR_MESSAGE_t Error message based on the response from the module.
  */
 WIFI_ERROR_MESSAGE_t wifi_command_close_TCP_connection();
+
+/**
+ * @brief Read the ESP8266 station MAC address via AT+CIFSR.
+ *
+ * @param mac_address Buffer of at least 18 bytes to receive the MAC string
+ *                    in "aa:bb:cc:dd:ee:ff" format (null-terminated).
+ * @return WIFI_ERROR_MESSAGE_t Error message based on the response from the module.
+ */
+WIFI_ERROR_MESSAGE_t wifi_command_get_mac(char *mac_address);

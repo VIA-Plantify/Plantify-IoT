@@ -21,13 +21,14 @@
 
 #define WIFI_SSID        "Ricky"
 #define WIFI_PASSWORD    "r89uuios"
-#define MQTT_BROKER_IP   "10.27.47.194"
+#define MQTT_BROKER_IP   "10.27.47.89"
 #define MQTT_BROKER_PORT 1883
 #define MQTT_CLIENT_ID   "mega2560_client"
-#define MQTT_PUB_TOPIC   "iot/mega/sensors"
+#define MQTT_PUB_TOPIC   "arduino"
 #define MQTT_SUB_TOPIC   "iot/mega/commands"
 
 uint8_t humidity_integer, humidity_decimal, temperature_integer, temperature_decimal;
+static char _device_mac[18] = "00:00:00:00:00:00";  /* filled after WiFi connect */
 
 /*---------------------------------------------------------------------------
  * Raw MQTT packet helpers
@@ -155,7 +156,7 @@ static uint16_t _seconds_since_ping = 0;
   Receive buffer for incoming TCP data (subscribed messages).
   The wifi driver writes here via the callback.
  */
-static char _rx_buf[128] = {0};
+static char _rx_buf[126] = {0};
 static volatile uint8_t _rx_ready = 0;
 
 static void tcp_rx_callback(void)
@@ -180,6 +181,14 @@ static uint8_t mqtt_raw_connect(void)
         return 0;
     }
     wifi_command_disable_echo();
+
+    /* Read and store the station MAC address for use in MQTT payloads */
+    if (wifi_command_get_mac(_device_mac) == WIFI_OK)
+        printf("Device MAC: %s\n", _device_mac);
+    else
+        printf("MAC read failed, using default.\n");
+
+    wifi_command("AT+CIFSR", 5); /* get and print local IP and MAC address */
 
     if (wifi_command_set_mode_to_1() != WIFI_OK)
     {
@@ -241,7 +250,7 @@ static uint8_t mqtt_raw_connect(void)
  *--------------------------------------------------------------------------*/
 static uint8_t mqtt_raw_publish(const char *payload)
 {
-    uint8_t pkt[128];
+    uint8_t pkt[198];
     uint8_t pkt_len = mqtt_build_publish(pkt, sizeof(pkt), MQTT_PUB_TOPIC, payload);
     if (pkt_len == 0)
     {
@@ -360,7 +369,7 @@ int main(void)
         uint16_t soil_value;
         uint16_t distance_mm;
         uint8_t  motion;
-        char     payload[96];
+        char     payload[126];
 
         /* Read sensors */
         dht11_get(&humidity_integer, &humidity_decimal,
@@ -386,7 +395,8 @@ int main(void)
         if (_mqtt_connected)
         {
             snprintf(payload, sizeof(payload),
-            "{\"temp\":%u.%u,\"hum\":%u.%u,\"light\":%u,\"soil\":%u,\"dist\":%u,\"motion\":%u}",
+            "{\"mac\":\"%s\",\"temp\":%u.%u,\"hum\":%u.%u,\"light\":%u,\"soil\":%u,\"dist\":%u,\"motion\":%u}",
+            _device_mac,
             temperature_integer, temperature_decimal,
             humidity_integer, humidity_decimal,
             light_value, soil_value, distance_mm, motion);
