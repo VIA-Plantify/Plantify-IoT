@@ -1,17 +1,26 @@
 /****************************************************************************
  * interactive.c
- * Complete fixed replacement for the interactive demo.
+ * Merged interactive demo — combines original driver set with fixed/improved
+ * version.
  *
- * Changes from original:
- * - Added <stdbool.h>
- * - Fixed unsafe input handling (removed gets)
- * - Fixed callback shared flags with volatile
- * - Fixed WiFi TCP callback to match driver signature
- * - Added MQTT helper flow using ESP-AT + Mosquitto broker on laptop
- * - Kept menu structure compatible with the existing project
- * - MQTT broker IP is now prompted at runtime (not hardcoded)
- * - MQTT uses anonymous auth (no username/password)
- *   NOTE: requires allow_anonymous true in mosquitto.conf until pwfile is set up
+ * Retained from original:
+ *   - Pump control (cases 16, 17)
+ *   - Soil moisture percentage (case 13)
+ *   - Accelerometer stub (case 15 → renumbered to 18)
+ *   - soil_init / pump_init in setup
+ *
+ * Retained from fixed version:
+ *   - <stdbool.h> include
+ *   - Safe input handling (no gets, uses _read_line_from_uart)
+ *   - volatile flags for callbacks
+ *   - Correct wifi_line_callback signature (void)
+ *   - MQTT demo (case 14)
+ *   - ESP8266 firmware check (case 15)
+ *   - mqtt_* helper functions
+ *
+ * Author:  Merged build
+ * Date:    2026
+ * Project: SPE4_API
  ****************************************************************************/
 #include <avr/io.h>
 #include <util/delay.h>
@@ -20,6 +29,7 @@
 #include <string.h>
 #include <stdbool.h>
 #include <stdint.h>
+#include <avr/interrupt.h>
 #include "uart_stdio.h"
 #include "led.h"
 #include "pir.h"
@@ -35,15 +45,16 @@
 #include "light.h"
 #include "soil.h"
 #include "tone.h"
+#include "pump.h"
+// #include "adxl345.h"
 
 #define MAX_STRING_LENGTH 100
-#define MAX_MENU_OPTIONS  15
+#define MAX_MENU_OPTIONS  19
 
 #define MQTT_DEFAULT_BROKER_PORT 1883
 #define MQTT_DEFAULT_CLIENT_ID   "mega2560_client"
 #define MQTT_DEFAULT_TOPIC       "iot/mega/sensors"
 
-/* Default WiFi credentials (same as main.c) */
 #define WIFI_DEFAULT_SSID        "Ricky"
 #define WIFI_DEFAULT_PASSWORD    "r89uuios"
 
@@ -56,9 +67,7 @@ static char _tcp_rx_buffer[MAX_STRING_LENGTH] = {0};
 static char _line_buffer1[MAX_STRING_LENGTH] = {0};
 static char _line_buffer2[MAX_STRING_LENGTH] = {0};
 
-/* Broker IP is now entered at runtime instead of hardcoded */
 static char _broker_ip[MAX_STRING_LENGTH] = {0};
-
 static char _mqtt_topic[MAX_STRING_LENGTH] = MQTT_DEFAULT_TOPIC;
 static char _mqtt_client_id[40] = MQTT_DEFAULT_CLIENT_ID;
 
@@ -131,11 +140,6 @@ static uint8_t mqtt_configure_and_connect(const char *broker_ip,
 {
     char cmd[160];
 
-    /*
-     * Anonymous auth: username and password fields are empty strings.
-     * Requires allow_anonymous true in mosquitto.conf.
-     * To add credentials later, replace the two \"\" with \"user\" \"pass\".
-     */
     snprintf(cmd, sizeof(cmd),
              "AT+MQTTUSERCFG=0,1,\"%s\",\"\",\"\",0,0,\"\"",
              client_id);
@@ -237,10 +241,14 @@ uint8_t menu(void)
     printf("\t 9. Proximity sensor (HC-SR04)\n");
     printf("\t10. Servo motor (SG90)\n");
     printf("\t11. Light sensor (KY-018)\n");
-    printf("\t12. Soil Moisture Sensor (capacitive)\n");
-    printf("\t13. Play Star Wars theme on the speaker\n");
-    printf("\t14. Publish a message to MQTT broker\n");
-    printf("\t15. Check ESP8266 firmware version\n");
+    printf("\t12. Soil Moisture Sensor (raw)\n");
+    printf("\t13. Soil Moisture Sensor (percentage)\n");
+    printf("\t14. Play Star Wars theme on the speaker\n");
+    printf("\t15. Show Accelerometer values (ADXL345)\n");
+    printf("\t16. Pump control\n");
+    printf("\t17. Pump run for X seconds\n");
+    printf("\t18. Publish a message to MQTT broker\n");
+    printf("\t19. Check ESP8266 firmware version\n");
 
     do
     {
@@ -301,6 +309,10 @@ int interactive_demo(void)
 {
     static int led2_timer_id = 0;
 
+    /* Initialize drivers that need setup */
+    pump_init();
+    soil_init(ADC_PK0);
+
     while (1)
     {
         switch (menu())
@@ -335,7 +347,7 @@ int interactive_demo(void)
             break;
 
         case 3:
-            printf("Display driver. Type 'q' to exit with reset/menu restart.\n");
+            printf("Display driver. Type 'q' to exit.\n");
             printf("Type a number between -999 and 9999:\n");
             while (scanf("%d", &x) == 1)
             {
@@ -350,16 +362,18 @@ int interactive_demo(void)
         {
             WIFI_ERROR_MESSAGE_t message;
 
-            printf("WiFi TCP demo. Type values and the board will send them to TCP port 23.\n");
-            _prompt_line("Enter WiFi SSID: ", _line_buffer1, sizeof(_line_buffer1));
-            _prompt_line("Enter WiFi password: ", _line_buffer2, sizeof(_line_buffer2));
+            printf("WiFi TCP demo.\n");
+            printf("NOTE: ESP8266 only supports 2.4GHz networks!\n");
+            _prompt_line("Enter WiFi SSID (max 27 chars): ", _line_buffer1, sizeof(_line_buffer1));
+            _prompt_line("Enter WiFi password (max 27 chars): ", _line_buffer2, sizeof(_line_buffer2));
 
             if (!mqtt_prepare_wifi())
                 break;
 
+            printf("Connecting to WiFi (up to %d attempts)...\n", WIFI_MAX_RETRIES);
             if (wifi_command_join_AP(_line_buffer1, _line_buffer2) != WIFI_OK)
             {
-                printf("Failed to join WiFi network.\n");
+                printf("Failed to join WiFi network after %d attempts.\n", WIFI_MAX_RETRIES);
                 break;
             }
             printf("Successfully joined WiFi network.\n");
@@ -392,14 +406,25 @@ int interactive_demo(void)
                 if (gets_nonblocking(_line_buffer2, sizeof(_line_buffer2)) > 0)
                 {
                     _line_buffer2[strcspn(_line_buffer2, "\r\n")] = '\0';
-                    if (_line_buffer2[0] == 'q' && _line_buffer2[1] == '\0')
+                    if (_line_buffer2[0] == 'r' && _line_buffer2[1] == '\0')
+                    {
+                        printf("Attempting to reconnect...\n");
+                        if (wifi_reconnect() == WIFI_OK)
+                            printf("Reconnected successfully.\n");
+                        else
+                            printf("Reconnect failed.\n");
+                    }
+                    else if (_line_buffer2[0] == 'q' && _line_buffer2[1] == '\0')
                     {
                         wifi_command_close_TCP_connection();
                         break;
                     }
-                    printf("You wrote: %s\n", _line_buffer2);
-                    wifi_command_TCP_transmit((uint8_t *)_line_buffer2,
-                                              strlen(_line_buffer2));
+                    else
+                    {
+                        printf("You wrote: %s\n", _line_buffer2);
+                        wifi_command_TCP_transmit((uint8_t *)_line_buffer2,
+                                                  strlen(_line_buffer2));
+                    }
                 }
                 _delay_ms(200);
             }
@@ -514,6 +539,7 @@ int interactive_demo(void)
 
         case 11:
             printf("Light sensor driver demo. Type 'q' to exit.\n");
+            printf("Light level will be printed every 2 seconds.\n");
             do
             {
                 uint16_t light_level = light_measure_raw();
@@ -526,24 +552,102 @@ int interactive_demo(void)
             break;
 
         case 12:
-            printf("Soil moisture sensor driver demo. Type 'q' to exit.\n");
+            printf("Soil moisture sensor (raw). Type 'q' to exit.\n");
+            printf("Reading from PK0 every 2 seconds.\n");
             do
             {
                 uint16_t soil_moisture = soil_measure_raw(ADC_PK0);
                 if (soil_moisture == UINT16_MAX)
                     printf("Failed to read soil moisture sensor.\n");
                 else
-                    printf("Soil moisture level: %u (0-1023)\n", soil_moisture);
+                    printf("Soil moisture (raw): %u (0-1023)\n", soil_moisture);
                 _delay_ms(2000);
             } while (!_quit());
             break;
 
         case 13:
+            printf("Soil moisture sensor (percentage). Type 'q' to exit.\n");
+            printf("Reading from PK0 every 2 seconds.\n");
+            do
+            {
+                uint8_t soil_pct = soil_measure_percentage(ADC_PK0);
+                if (soil_pct == UINT8_MAX)
+                    printf("Failed to read soil moisture sensor.\n");
+                else
+                    printf("Soil moisture: %u%%\n", soil_pct);
+                _delay_ms(2000);
+            } while (!_quit());
+            break;
+
+        case 14:
             printf("Playing Star Wars theme on the speaker. Reset to interrupt.\n");
             tone_play_starwars();
             break;
 
-        case 14:
+        case 15:
+        {
+            // int16_t ax, ay, az;
+            // printf("ADXL345 Accelerometer demo. Type 'q' to exit.\n");
+            // do
+            // {
+            //     adxl345_read_xyz(&ax, &ay, &az);
+            //     printf("Acceleration - X: %d, Y: %d, Z: %d\n", ax, ay, az);
+            //     _delay_ms(2000);
+            // } while (!_quit());
+            printf("Accelerometer not available.\n");
+            break;
+        }
+
+        case 16:
+        {
+            uint8_t pump_choice;
+            char pump_line[8];
+            char *pump_end;
+
+            printf("Pump control.\n");
+            printf("1. Turn pump on\n");
+            printf("2. Turn pump off\n");
+            printf("3. Check if pump is running\n");
+            _read_line_from_uart(pump_line, sizeof(pump_line));
+            pump_choice = (uint8_t)strtol(pump_line, &pump_end, 10);
+
+            switch (pump_choice)
+            {
+            case 1:
+                pump_on();
+                printf("Pump is now on.\n");
+                break;
+            case 2:
+                pump_off();
+                printf("Pump is now off.\n");
+                break;
+            case 3:
+                printf("Pump is %s.\n", pump_is_running() ? "running" : "not running");
+                break;
+            default:
+                printf("Invalid option.\n");
+                break;
+            }
+            break;
+        }
+
+        case 17:
+        {
+            char sec_line[16];
+            char *sec_end;
+            uint32_t seconds;
+
+            printf("Pump run for X seconds.\n");
+            printf("Enter duration in seconds: ");
+            _read_line_from_uart(sec_line, sizeof(sec_line));
+            seconds = (uint32_t)strtoul(sec_line, &sec_end, 10);
+            printf("Running pump for %lu seconds...\n", seconds);
+            pump_run_for(seconds * 1000UL);
+            printf("Pump done.\n");
+            break;
+        }
+
+        case 18:
         {
             char payload[80];
 
@@ -553,7 +657,6 @@ int interactive_demo(void)
             printf("Topic: %s\n", MQTT_DEFAULT_TOPIC);
             printf("Auth: anonymous (ensure allow_anonymous true in mosquitto.conf)\n\n");
 
-            /* Prompt for broker IP at runtime */
             _prompt_line("Enter broker IP (your laptop's LAN IP, e.g. 192.168.x.x): ",
                          _broker_ip, sizeof(_broker_ip));
             if (_broker_ip[0] == '\0')
@@ -565,11 +668,9 @@ int interactive_demo(void)
             printf("To subscribe, run:\n");
             printf("  mosquitto_sub -h %s -t '#'\n\n", _broker_ip);
 
-            /* Prepare WiFi */
             if (!mqtt_prepare_wifi())
                 break;
 
-            /* Connect to WiFi */
             if (wifi_command_join_AP(WIFI_DEFAULT_SSID, WIFI_DEFAULT_PASSWORD) != WIFI_OK)
             {
                 printf("WiFi join failed.\n");
@@ -577,7 +678,6 @@ int interactive_demo(void)
             }
             printf("WiFi connected.\n");
 
-            /* Connect to MQTT broker (anonymous) */
             if (!mqtt_configure_and_connect(_broker_ip,
                                             MQTT_DEFAULT_BROKER_PORT,
                                             MQTT_DEFAULT_CLIENT_ID))
@@ -601,7 +701,7 @@ int interactive_demo(void)
             break;
         }
 
-        case 15:
+        case 19:
         {
             printf("Checking ESP8266 firmware version...\n");
             wifi_command_AT();
