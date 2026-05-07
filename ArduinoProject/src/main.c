@@ -272,6 +272,11 @@ static void mqtt_handle_incoming(void)
                 led_off(1);
             else if (strcmp(payload_str, "beep") == 0)
                 buzzer_beep();
+            else if (strncmp(payload_str, "pump_on_", 8) == 0)
+            {
+                uint8_t duration = (uint8_t)atoi(&payload_str[8]);
+                pump_control(duration);
+            }
         }
     }
     else if (data[0] == 0x20)
@@ -283,6 +288,30 @@ static void mqtt_handle_incoming(void)
 
     _rx_buf[0] = '\0';
 }
+
+static void pump_control(uint8_t duration_seconds)
+{
+    if (duration_seconds == 0)
+        return;
+
+    printf("Pump ON for %u seconds\n", duration_seconds);
+    pump_on();
+
+    uint16_t elapsed_ms = 0;
+    uint16_t target_ms = (uint16_t)duration_seconds * 1000;
+
+    while (elapsed_ms < target_ms)
+    {
+        _delay_ms(100);
+        elapsed_ms += 100;
+        mqtt_handle_incoming(); /* Allows procesing of incoming MQTT messages while pump is running.
+ */
+    }
+
+    pump_off();
+    printf("Pump OFF\n");
+}
+
 
 /*
     main
