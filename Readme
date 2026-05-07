@@ -1,1 +1,4 @@
-Plantify arduino code and mqtt broker is uploded, they need to be treated as separate programs
+This part contains the ATMega 2560 commands including sensors -> soil and air humidity, temperature, distance(waterlevel), light, waterpump, wifi
+The following sensors are set up in platform.io enivroment and connect the machine to an online broker (HiveMQ), a legit running serverless cloud cluster.
+
+Plantify IOT team is working to make sure your plants are getting their daily needs as intended :)
