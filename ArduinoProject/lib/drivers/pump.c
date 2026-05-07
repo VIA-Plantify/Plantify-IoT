@@ -1,4 +1,3 @@
-#include "mqtt.h"
 #include "pump.h"
 #include <util/delay.h>
 #include <avr/io.h>
@@ -27,12 +26,9 @@ bool pump_is_running(void)
 void pump_run_for(uint32_t miliseconds)
 {
     pump_on();
-    uint32_t elapsed = 0;
-    while (elapsed < milliseconds)
+    for(uint32_t i = 0; i < miliseconds; i++)
     {
-        _delay_ms(100);
-        elapsed += 100;
-        mqtt_handle_incoming();
+        _delay_ms(1);
     }
     pump_off();
 }
