@@ -19,124 +19,111 @@
 #include "soil.h"
 #include "timer.h"
 
-#define WIFI_SSID        "Ricky"
-#define WIFI_PASSWORD    "r89uuios"
-#define MQTT_BROKER_IP   "10.27.47.89"
-#define MQTT_BROKER_PORT 1883
-#define MQTT_CLIENT_ID   "mega2560_client"
-#define MQTT_PUB_TOPIC   "arduino"
-#define MQTT_SUB_TOPIC   "iot/mega/commands"
+#define WIFI_SSID "Ricky"
+#define WIFI_PASSWORD "r89uuios"
+#define MQTT_BROKER_HOST "676d176f8a7b4b33ab4d8f1733d48d3d.s1.eu.hivemq.cloud"
+#define MQTT_BROKER_PORT 8883
+#define MQTT_USERNAME "Plantify"
+#define MQTT_PASSWORD "Password123"
+#define MQTT_CLIENT_ID "mega2560_client"
+#define MQTT_PUB_TOPIC "arduino"
+#define MQTT_SUB_TOPIC "iot/mega/commands"
 
 uint8_t humidity_integer, humidity_decimal, temperature_integer, temperature_decimal;
-static char _device_mac[18] = "00:00:00:00:00:00";  /* filled after WiFi connect */
-
-/*---------------------------------------------------------------------------
- * Raw MQTT packet helpers
- * MQTT 3.1.1 over plain TCP
- *--------------------------------------------------------------------------*/
+static char _device_mac[18] = "84:f3:eb:95:b4:b3";
 
 /*
-  Build a MQTT CONNECT packet.
-  Returns packet length.
- 
-  Packet layout:
-    Byte 0:    0x10  (CONNECT fixed header)
-    Byte 1:    remaining length
-    Bytes 2-3: 0x00 0x04  (protocol name length)
-    Bytes 4-7: "MQTT"
-    Byte 8:    0x04  (protocol level = 3.1.1)
-    Byte 9:    0x02  (connect flags: clean session)
-    Bytes 10-11: 0x00 0x3C (keep-alive = 60s)
-    Bytes 12-13: client ID length (2 bytes, big-endian)
-    Bytes 14+:  client ID string
+    Raw MQTT packet helpers — MQTT 3.1.1 over SSL
+*/
+
+/*
+ * Build a MQTT CONNECT packet with username and password.
+ * Connect flags = 0xC2: username(1) password(1) clean-session(1)
  */
 static uint8_t mqtt_build_connect(uint8_t *buf, uint8_t buf_size,
-                                  const char *client_id)
+                                  const char *client_id,
+                                  const char *username,
+                                  const char *password)
 {
     uint8_t id_len = (uint8_t)strlen(client_id);
-    uint8_t remaining = 10 + 2 + id_len;  /* variable header + client ID */
+    uint8_t user_len = (uint8_t)strlen(username);
+    uint8_t pass_len = (uint8_t)strlen(password);
+    uint8_t remaining = 10 + 2 + id_len + 2 + user_len + 2 + pass_len;
 
     if ((uint8_t)(2 + remaining) > buf_size)
         return 0;
 
     uint8_t i = 0;
-    buf[i++] = 0x10;            /* CONNECT */
+    buf[i++] = 0x10;
     buf[i++] = remaining;
-    buf[i++] = 0x00;            /* protocol name length MSB */
-    buf[i++] = 0x04;            /* protocol name length LSB */
+    buf[i++] = 0x00;
+    buf[i++] = 0x04;
     buf[i++] = 'M';
     buf[i++] = 'Q';
     buf[i++] = 'T';
     buf[i++] = 'T';
-    buf[i++] = 0x04;            /* protocol level 3.1.1 */
-    buf[i++] = 0x02;            /* connect flags: clean session */
-    buf[i++] = 0x00;            /* keep-alive MSB */
-    buf[i++] = 0x3C;            /* keep-alive LSB = 60s */
-    buf[i++] = 0x00;            /* client ID length MSB */
-    buf[i++] = id_len;          /* client ID length LSB */
+    buf[i++] = 0x04; /* protocol level 3.1.1 */
+    buf[i++] = 0xC2; /* connect flags: username + password + clean session */
+    buf[i++] = 0x00; /* keep-alive MSB */
+    buf[i++] = 0x3C; /* keep-alive 60s */
+    buf[i++] = 0x00;
+    buf[i++] = id_len;
     memcpy(&buf[i], client_id, id_len);
     i += id_len;
+    buf[i++] = 0x00;
+    buf[i++] = user_len;
+    memcpy(&buf[i], username, user_len);
+    i += user_len;
+    buf[i++] = 0x00;
+    buf[i++] = pass_len;
+    memcpy(&buf[i], password, pass_len);
+    i += pass_len;
 
     return i;
 }
 
-/*
- * Build a MQTT SUBSCRIBE packet for a single topic, QoS 0.
- * Returns packet length.
- */
 static uint8_t mqtt_build_subscribe(uint8_t *buf, uint8_t buf_size,
                                     const char *topic, uint16_t packet_id)
 {
     uint8_t topic_len = (uint8_t)strlen(topic);
-    uint8_t remaining = 2 + 2 + topic_len + 1;  /* packet ID + topic len + topic + QoS */
-
+    uint8_t remaining = 2 + 2 + topic_len + 1;
     if ((uint8_t)(2 + remaining) > buf_size)
         return 0;
 
     uint8_t i = 0;
-    buf[i++] = 0x82;                        /* SUBSCRIBE */
+    buf[i++] = 0x82;
     buf[i++] = remaining;
-    buf[i++] = (uint8_t)(packet_id >> 8);   /* packet ID MSB */
-    buf[i++] = (uint8_t)(packet_id & 0xFF); /* packet ID LSB */
-    buf[i++] = 0x00;                        /* topic length MSB */
-    buf[i++] = topic_len;                   /* topic length LSB */
+    buf[i++] = (uint8_t)(packet_id >> 8);
+    buf[i++] = (uint8_t)(packet_id & 0xFF);
+    buf[i++] = 0x00;
+    buf[i++] = topic_len;
     memcpy(&buf[i], topic, topic_len);
     i += topic_len;
-    buf[i++] = 0x00;                        /* QoS 0 */
-
+    buf[i++] = 0x00;
     return i;
 }
 
-/*
- * Build a MQTT PUBLISH packet, QoS 0, no retain.
- * Returns packet length.
- */
 static uint8_t mqtt_build_publish(uint8_t *buf, uint8_t buf_size,
                                   const char *topic, const char *payload)
 {
-    uint8_t topic_len   = (uint8_t)strlen(topic);
+    uint8_t topic_len = (uint8_t)strlen(topic);
     uint8_t payload_len = (uint8_t)strlen(payload);
-    uint8_t remaining   = 2 + topic_len + payload_len;
-
+    uint8_t remaining = 2 + topic_len + payload_len;
     if ((uint8_t)(2 + remaining) > buf_size)
         return 0;
 
     uint8_t i = 0;
-    buf[i++] = 0x30;            /* PUBLISH, QoS 0, no retain */
+    buf[i++] = 0x30;
     buf[i++] = remaining;
-    buf[i++] = 0x00;            /* topic length MSB */
-    buf[i++] = topic_len;       /* topic length LSB */
+    buf[i++] = 0x00;
+    buf[i++] = topic_len;
     memcpy(&buf[i], topic, topic_len);
     i += topic_len;
     memcpy(&buf[i], payload, payload_len);
     i += payload_len;
-
     return i;
 }
 
-/*
-  Build a MQTT PING-request packet (2 bytes).
- */
 static uint8_t mqtt_build_pingreq(uint8_t *buf)
 {
     buf[0] = 0xC0;
@@ -144,32 +131,24 @@ static uint8_t mqtt_build_pingreq(uint8_t *buf)
     return 2;
 }
 
-/*---------------------------------------------------------------------------
- * WiFi / MQTT connection state
- *--------------------------------------------------------------------------*/
+/*
+    State
+*/
 static uint8_t _mqtt_connected = 0;
 static uint16_t _seconds_since_ping = 0;
+#define PING_INTERVAL_S 45
 
-#define PING_INTERVAL_S 45   /* send PING-request every 45s, keep-alive is 60s */
-
-/*
-  Receive buffer for incoming TCP data (subscribed messages).
-  The wifi driver writes here via the callback.
- */
-static char _rx_buf[126] = {0};
+static char _rx_buf[128] = {0};
 static volatile uint8_t _rx_ready = 0;
 
-static void tcp_rx_callback(void)
-{
-    _rx_ready = 1;
-}
+static void tcp_rx_callback(void) { _rx_ready = 1; }
 
-/*---------------------------------------------------------------------------
- * Connect WiFi -> open TCP -> send MQTT CONNECT -> SUBSCRIBE
- *--------------------------------------------------------------------------*/
+/*
+    Connect: WiFi -> SSL -> MQTT CONNECT (with credentials) -> SUBSCRIBE
+*/
 static uint8_t mqtt_raw_connect(void)
 {
-    uint8_t pkt[64];
+    uint8_t pkt[128];
     uint8_t pkt_len;
 
     _mqtt_connected = 0;
@@ -182,13 +161,10 @@ static uint8_t mqtt_raw_connect(void)
     }
     wifi_command_disable_echo();
 
-    /* Read and store the station MAC address for use in MQTT payloads */
     if (wifi_command_get_mac(_device_mac) == WIFI_OK)
         printf("Device MAC: %s\n", _device_mac);
     else
         printf("MAC read failed, using default.\n");
-
-    wifi_command("AT+CIFSR", 5); /* get and print local IP and MAC address */
 
     if (wifi_command_set_mode_to_1() != WIFI_OK)
     {
@@ -205,20 +181,19 @@ static uint8_t mqtt_raw_connect(void)
     }
     _delay_ms(2000);
 
-    printf("Opening TCP to %s:%d...\n", MQTT_BROKER_IP, MQTT_BROKER_PORT);
+    printf("Opening SSL to HiveMQ...\n");
     _rx_buf[0] = '\0';
-    if (wifi_command_create_TCP_connection(MQTT_BROKER_IP,
+    if (wifi_command_create_SSL_connection(MQTT_BROKER_HOST,
                                            MQTT_BROKER_PORT,
                                            tcp_rx_callback,
                                            _rx_buf) != WIFI_OK)
     {
-        printf("TCP connection failed.\n");
+        printf("SSL connection failed.\n");
         return 0;
     }
     _delay_ms(500);
 
-    /* Send MQTT CONNECT */
-    pkt_len = mqtt_build_connect(pkt, sizeof(pkt), MQTT_CLIENT_ID);
+    pkt_len = mqtt_build_connect(pkt, sizeof(pkt), MQTT_CLIENT_ID, MQTT_USERNAME, MQTT_PASSWORD);
     if (pkt_len == 0)
     {
         printf("CONNECT build failed.\n");
@@ -228,14 +203,13 @@ static uint8_t mqtt_raw_connect(void)
     wifi_command_TCP_transmit(pkt, pkt_len);
     _delay_ms(500);
 
-    /* Send MQTT SUBSCRIBE */
     pkt_len = mqtt_build_subscribe(pkt, sizeof(pkt), MQTT_SUB_TOPIC, 1);
     if (pkt_len == 0)
     {
         printf("SUBSCRIBE build failed.\n");
         return 0;
     }
-    printf("Sending MQTT SUBSCRIBE to %s...\n", MQTT_SUB_TOPIC);
+    printf("Subscribing to %s...\n", MQTT_SUB_TOPIC);
     wifi_command_TCP_transmit(pkt, pkt_len);
     _delay_ms(300);
 
@@ -245,16 +219,16 @@ static uint8_t mqtt_raw_connect(void)
     return 1;
 }
 
-/*---------------------------------------------------------------------------
- * Publish payload
- *--------------------------------------------------------------------------*/
+/*
+    Publish
+*/
 static uint8_t mqtt_raw_publish(const char *payload)
 {
     uint8_t pkt[198];
     uint8_t pkt_len = mqtt_build_publish(pkt, sizeof(pkt), MQTT_PUB_TOPIC, payload);
     if (pkt_len == 0)
     {
-        printf("PUBLISH build failed (payload too long?).\n");
+        printf("PUBLISH build failed.\n");
         return 0;
     }
     if (wifi_command_TCP_transmit(pkt, pkt_len) != WIFI_OK)
@@ -266,46 +240,32 @@ static uint8_t mqtt_raw_publish(const char *payload)
     return 1;
 }
 
-/*---------------------------------------------------------------------------
- * Handle any incoming subscribed message
- *--------------------------------------------------------------------------*/
+/*
+    Handle incoming messages
+*/
 static void mqtt_handle_incoming(void)
 {
     if (!_rx_ready)
         return;
-
     _rx_ready = 0;
 
-    /*
-      _rx_buf contains raw MQTT bytes from the broker.
-      PUBLISH packet starts with 0x30. We extract the payload after
-      the variable header (fixed header + remaining length + topic length).
-      For simplicity we just print the raw buffer as a hex + ascii dump
-      and also try to extract a printable payload.
-     */
     uint8_t *data = (uint8_t *)_rx_buf;
 
     if (data[0] == 0x30)
     {
-        /* PUBLISH packet received */
         uint8_t remaining = data[1];
         uint8_t topic_len = (data[2] << 8) | data[3];
-
         if (topic_len < remaining)
         {
             uint8_t payload_offset = 2 + 2 + topic_len;
-            uint8_t payload_len    = remaining - 2 - topic_len;
-
+            uint8_t payload_len = remaining - 2 - topic_len;
             char payload_str[64] = {0};
             if (payload_len >= sizeof(payload_str))
                 payload_len = sizeof(payload_str) - 1;
-
             memcpy(payload_str, &_rx_buf[payload_offset], payload_len);
             payload_str[payload_len] = '\0';
-
             printf("CMD received: %s\n", payload_str);
 
-            /* Simple command handling */
             if (strcmp(payload_str, "led_on") == 0)
                 led_on(1);
             else if (strcmp(payload_str, "led_off") == 0)
@@ -315,25 +275,18 @@ static void mqtt_handle_incoming(void)
         }
     }
     else if (data[0] == 0x20)
-    {
-        printf("Connection received (broker accepted connection).\n");
-    }
+        printf("CONNACK received.\n");
     else if (data[0] == 0x90)
-    {
-        printf("Subscriber connction received (subscribed OK).\n");
-    }
+        printf("SUBACK received.\n");
     else if (data[0] == 0xD0)
-    {
-        /* PINGRESP */
         printf("PINGRESP received.\n");
-    }
 
     _rx_buf[0] = '\0';
 }
 
-/*---------------------------------------------------------------------------
- * main
- *--------------------------------------------------------------------------*/
+/*
+    main
+*/
 int main(void)
 {
     led_init();
@@ -349,57 +302,49 @@ int main(void)
     if (UART_OK != uart_stdio_init(115200))
     {
         led_on(4);
-        while (1) { }
+        while (1)
+        {
+        }
     }
 
     sei();
-    printf("SEP4 IoT Hardware - Raw MQTT Mode\n");
+    printf("SEP4 IoT Hardware - HiveMQ Cloud\n");
 
-    /* Hold button 2 at boot to enter interactive demo instead */
     if (button_get(2))
     {
-        interactive_demo();  /* never returns */
+        interactive_demo();
     }
 
     mqtt_raw_connect();
 
     while (1)
     {
-        uint16_t light_value;
-        uint16_t soil_value;
-        uint16_t distance_mm;
-        uint8_t  motion;
-        char     payload[126];
+        uint16_t light_value, soil_value, distance_mm;
+        uint8_t motion;
+        char payload[128];
 
-        /* Read sensors */
-        dht11_get(&humidity_integer, &humidity_decimal,
-                  &temperature_integer, &temperature_decimal);
-        light_value  = light_measure_raw();
-        soil_value   = soil_measure_raw(ADC_PK0);
-        distance_mm  = proximity_measure();
-        motion       = (pir_get_state() != PIR_NO_MOTION) ? 1 : 0;
+        dht11_get(&humidity_integer, &humidity_decimal, &temperature_integer, &temperature_decimal);
+        light_value = light_measure_raw();
+        soil_value = soil_measure_percentage(ADC_PK0);
+        distance_mm = proximity_measure();
+        motion = (pir_get_state() != PIR_NO_MOTION) ? 1 : 0;
 
-        /* Print to serial */
         printf("T:%u.%uC H:%u.%u%% L:%u S:%u D:%u M:%u\n",
                temperature_integer, temperature_decimal,
                humidity_integer, humidity_decimal,
                light_value, soil_value, distance_mm, motion);
 
-        /* Show temperature on display */
         display_int((temperature_integer * 10) + temperature_decimal);
-
-        /* Handle any incoming subscribed message */
         mqtt_handle_incoming();
 
-        /* Publish or reconnect */
         if (_mqtt_connected)
         {
             snprintf(payload, sizeof(payload),
-            "{\"mac\":\"%s\",\"temp\":%u.%u,\"hum\":%u.%u,\"light\":%u,\"soil\":%u,\"dist\":%u,\"motion\":%u}",
-            _device_mac,
-            temperature_integer, temperature_decimal,
-            humidity_integer, humidity_decimal,
-            light_value, soil_value, distance_mm, motion);
+                     "{\"mac\":\"%s\",\"temp\":%u.%u,\"hum\":%u.%u,\"light\":%u,\"soil\":%u,\"dist\":%u,\"motion\":%u}",
+                     _device_mac,
+                     temperature_integer, temperature_decimal,
+                     humidity_integer, humidity_decimal,
+                     light_value, soil_value, distance_mm, motion);
 
             if (!mqtt_raw_publish(payload))
             {
@@ -409,8 +354,7 @@ int main(void)
                 mqtt_raw_connect();
             }
 
-            /* Keep-alive ping */
-            _seconds_since_ping += 3;  /* loop runs every ~3s */
+            _seconds_since_ping += 3;
             if (_seconds_since_ping >= PING_INTERVAL_S)
             {
                 uint8_t ping[2];
