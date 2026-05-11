@@ -4,31 +4,39 @@
 #include "buzzer.h"
 #include "pump.h"
 #include <avr/io.h>
+#include <avr/pgmspace.h>
 #include <util/delay.h>
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
 
-// ─── Internal State ───────────────────────────────────────────────────────────
-static uint8_t  _mqtt_connected      = 0;
-static uint16_t _seconds_since_ping  = 0;
-static char     _rx_buf[128]         = {0};
-static volatile uint8_t _rx_ready   = 0;
-char     _device_mac[18]      = "84:f3:eb:95:b4:b3";
+static uint8_t _mqtt_connected = 0;
+static uint16_t _seconds_since_ping = 0;
+static char _rx_buf[128] = {0};
+static volatile uint8_t _rx_ready = 0;
+static char _pub_topic[64] = {0};
+static char _sub_topic[64] = {0};
+char _device_mac[18] = {0};
 
-// ─── RX Callback ─────────────────────────────────────────────────────────────
+/* ------------------------------------------------------------------ */
+/*  UART receive callback — fires when a complete +IPD frame arrives   */
+/* ------------------------------------------------------------------ */
+
 static void tcp_rx_callback(void)
 {
     _rx_ready = 1;
 }
 
-// ─── Packet Builders ─────────────────────────────────────────────────────────
+/* ------------------------------------------------------------------ */
+/*  MQTT packet builders                                               */
+/* ------------------------------------------------------------------ */
+
 static uint8_t mqtt_build_connect(uint8_t *buf, uint8_t buf_size,
-                                   const char *client_id,
-                                   const char *username,
-                                   const char *password)
+                                  const char *client_id,
+                                  const char *username,
+                                  const char *password)
 {
-    uint8_t id_len   = (uint8_t)strlen(client_id);
+    uint8_t id_len = (uint8_t)strlen(client_id);
     uint8_t user_len = (uint8_t)strlen(username);
     uint8_t pass_len = (uint8_t)strlen(password);
     uint8_t remaining = 10 + 2 + id_len + 2 + user_len + 2 + pass_len;
@@ -37,33 +45,36 @@ static uint8_t mqtt_build_connect(uint8_t *buf, uint8_t buf_size,
         return 0;
 
     uint8_t i = 0;
-    buf[i++] = 0x10;
+    buf[i++] = 0x10; /* CONNECT fixed header                */
     buf[i++] = remaining;
-    buf[i++] = 0x00;
-    buf[i++] = 0x04;
+    buf[i++] = 0x00; /* Protocol name length MSB            */
+    buf[i++] = 0x04; /* Protocol name length LSB            */
     buf[i++] = 'M';
     buf[i++] = 'Q';
     buf[i++] = 'T';
     buf[i++] = 'T';
-    buf[i++] = 0x04; // protocol level 3.1.1
-    buf[i++] = 0xC2; // connect flags: username + password + clean session
-    buf[i++] = 0x00; // keep-alive MSB
-    buf[i++] = 0x3C; // keep-alive 60s
+    buf[i++] = 0x04; /* Protocol level (3.1.1)              */
+    buf[i++] = 0xC2; /* Connect flags: username+password    */
+    buf[i++] = 0x00; /* Keep-alive MSB                      */
+    buf[i++] = 0x3C; /* Keep-alive LSB (60 seconds)         */
     buf[i++] = 0x00;
     buf[i++] = id_len;
-    memcpy(&buf[i], client_id, id_len); i += id_len;
+    memcpy(&buf[i], client_id, id_len);
+    i += id_len;
     buf[i++] = 0x00;
     buf[i++] = user_len;
-    memcpy(&buf[i], username, user_len); i += user_len;
+    memcpy(&buf[i], username, user_len);
+    i += user_len;
     buf[i++] = 0x00;
     buf[i++] = pass_len;
-    memcpy(&buf[i], password, pass_len); i += pass_len;
+    memcpy(&buf[i], password, pass_len);
+    i += pass_len;
 
     return i;
 }
 
 static uint8_t mqtt_build_subscribe(uint8_t *buf, uint8_t buf_size,
-                                     const char *topic, uint16_t packet_id)
+                                    const char *topic, uint16_t packet_id)
 {
     uint8_t topic_len = (uint8_t)strlen(topic);
     uint8_t remaining = 2 + 2 + topic_len + 1;
@@ -77,17 +88,18 @@ static uint8_t mqtt_build_subscribe(uint8_t *buf, uint8_t buf_size,
     buf[i++] = (uint8_t)(packet_id & 0xFF);
     buf[i++] = 0x00;
     buf[i++] = topic_len;
-    memcpy(&buf[i], topic, topic_len); i += topic_len;
-    buf[i++] = 0x00;
+    memcpy(&buf[i], topic, topic_len);
+    i += topic_len;
+    buf[i++] = 0x00; /* QoS 0                               */
     return i;
 }
 
 static uint8_t mqtt_build_publish(uint8_t *buf, uint8_t buf_size,
-                                   const char *topic, const char *payload)
+                                  const char *topic, const char *payload)
 {
-    uint8_t topic_len   = (uint8_t)strlen(topic);
+    uint8_t topic_len = (uint8_t)strlen(topic);
     uint8_t payload_len = (uint8_t)strlen(payload);
-    uint8_t remaining   = 2 + topic_len + payload_len;
+    uint8_t remaining = 2 + topic_len + payload_len;
     if ((uint8_t)(2 + remaining) > buf_size)
         return 0;
 
@@ -96,8 +108,10 @@ static uint8_t mqtt_build_publish(uint8_t *buf, uint8_t buf_size,
     buf[i++] = remaining;
     buf[i++] = 0x00;
     buf[i++] = topic_len;
-    memcpy(&buf[i], topic, topic_len); i += topic_len;
-    memcpy(&buf[i], payload, payload_len); i += payload_len;
+    memcpy(&buf[i], topic, topic_len);
+    i += topic_len;
+    memcpy(&buf[i], payload, payload_len);
+    i += payload_len;
     return i;
 }
 
@@ -108,97 +122,210 @@ static uint8_t mqtt_build_pingreq(uint8_t *buf)
     return 2;
 }
 
-// ─── Public API ───────────────────────────────────────────────────────────────
-uint8_t mqtt_raw_connect(void)
+/* ------------------------------------------------------------------ */
+/*  Connect                                                             */
+/* ------------------------------------------------------------------ */
+
+uint8_t mqtt_raw_connect_with_credentials(char *ssid, char *password)
 {
     uint8_t pkt[128];
     uint8_t pkt_len;
 
     _mqtt_connected = 0;
 
-    printf("Starting WiFi...\n");
+    /* --- AT check -------------------------------------------------- */
+    printf_P(PSTR("AT check\n"));
     if (wifi_command_AT() != WIFI_OK)
     {
-        printf("ESP not responding.\n");
+        printf_P(PSTR("ESP fail\n"));
         return 0;
     }
+    printf_P(PSTR("AT OK\n"));
+
     wifi_command_disable_echo();
+    wifi_command_set_mode_to_1();
+    _delay_ms(500);
 
+    /* --- Join WiFi ------------------------------------------------- */
+    printf_P(PSTR("Joining: %s\n"), ssid);
+    WIFI_ERROR_MESSAGE_t join = wifi_command_join_AP(ssid, password);
+    printf_P(PSTR("Join result: %d\n"), join);
+    if (join != WIFI_OK)
+    {
+        printf_P(PSTR("Join fail\n"));
+        return 0;
+    }
+    _delay_ms(5000);
+
+    /* --- Get MAC and build per-device topics ----------------------- */
     if (wifi_command_get_mac(_device_mac) == WIFI_OK)
-        printf("Device MAC: %s\n", _device_mac);
+        printf_P(PSTR("MAC: %s\n"), _device_mac);
     else
-        printf("MAC read failed, using default.\n");
+        printf_P(PSTR("MAC fail\n"));
 
-    if (wifi_command_set_mode_to_1() != WIFI_OK)
-    {
-        printf("Station mode failed.\n");
-        return 0;
-    }
-    _delay_ms(500);
+    snprintf(_pub_topic, sizeof(_pub_topic), "arduino/%s/sensors", _device_mac);
+    snprintf(_sub_topic, sizeof(_sub_topic), "arduino/%s/commands", _device_mac);
+    printf_P(PSTR("Pub: %s\n"), _pub_topic);
+    printf_P(PSTR("Sub: %s\n"), _sub_topic);
 
-    printf("Joining WiFi...\n");
-    if (wifi_command_join_AP(WIFI_SSID, WIFI_PASSWORD) != WIFI_OK)
-    {
-        printf("WiFi join failed.\n");
-        return 0;
-    }
-    _delay_ms(2000);
+    /* FIX: unique client ID per device prevents HiveMQ from kicking
+       a second device that connects with the same ID               */
+    char client_id[32];
+    char clean_mac[13] = {0};
+    uint8_t j = 0;
+    for (uint8_t i = 0; i < strlen(_device_mac) && j < 12; i++)
+        if (_device_mac[i] != ':')
+            clean_mac[j++] = _device_mac[i];
+    snprintf(client_id, sizeof(client_id), "plantpot_%s", clean_mac);
 
-    printf("Opening SSL to HiveMQ...\n");
+    /* --- Open SSL connection --------------------------------------- */
+    printf_P(PSTR("SSL connecting...\n"));
     _rx_buf[0] = '\0';
-    if (wifi_command_create_SSL_connection(MQTT_BROKER_HOST,
-                                            MQTT_BROKER_PORT,
-                                            tcp_rx_callback,
-                                            _rx_buf) != WIFI_OK)
-    {
-        printf("SSL connection failed.\n");
-        return 0;
-    }
-    _delay_ms(500);
+    _rx_ready = 0;
 
-    pkt_len = mqtt_build_connect(pkt, sizeof(pkt), MQTT_CLIENT_ID, MQTT_USERNAME, MQTT_PASSWORD);
-    if (pkt_len == 0)
+    uint8_t ssl_ok = 0;
+    for (uint8_t i = 0; i < 3; i++)
     {
-        printf("CONNECT build failed.\n");
+        printf_P(PSTR("SSL attempt %d\n"), i + 1);
+        WIFI_ERROR_MESSAGE_t ssl = wifi_command_create_SSL_connection(
+            MQTT_BROKER_HOST, MQTT_BROKER_PORT, tcp_rx_callback, _rx_buf);
+        printf_P(PSTR("SSL result: %d\n"), ssl);
+        if (ssl == WIFI_OK)
+        {
+            ssl_ok = 1;
+            printf_P(PSTR("SSL OK\n"));
+            break;
+        }
+        _delay_ms(3000);
+    }
+
+    if (!ssl_ok)
+    {
+        printf_P(PSTR("SSL all failed\n"));
         return 0;
     }
-    printf("Sending MQTT CONNECT...\n");
+
+    /* The 4-second TLS handshake wait is already inside
+       wifi_command_create_SSL_connection — no extra delay needed here */
+
+    /* --- Send MQTT CONNECT ---------------------------------------- */
+    pkt_len = mqtt_build_connect(pkt, sizeof(pkt), client_id,
+                                 MQTT_USERNAME, MQTT_PASSWORD);
+    if (!pkt_len)
+    {
+        printf_P(PSTR("CONNECT build fail\n"));
+        return 0;
+    }
+
+    _rx_ready = 0;
+    _rx_buf[0] = '\0';
+
+    printf_P(PSTR("Sending CONNECT (%d bytes)\n"), pkt_len);
+    printf_P(PSTR("CONNECT hex:\n"));
+    for (uint8_t i = 0; i < pkt_len; i++)
+        printf_P(PSTR("%02X "), pkt[i]);
+    printf_P(PSTR("\n"));
     wifi_command_TCP_transmit(pkt, pkt_len);
-    _delay_ms(500);
 
-    pkt_len = mqtt_build_subscribe(pkt, sizeof(pkt), MQTT_SUB_TOPIC, 1);
-    if (pkt_len == 0)
+    /* Wait for CONNACK — broker must respond within 3 seconds        */
+    for (uint16_t i = 0; i < 300; i++)
     {
-        printf("SUBSCRIBE build failed.\n");
+        _delay_ms(10);
+        if (_rx_ready)
+            break;
+    }
+
+    /* --- Verify CONNACK ------------------------------------------- */
+    if (!_rx_ready)
+    {
+        printf_P(PSTR("CONNACK timeout\n"));
         return 0;
     }
-    printf("Subscribing to %s...\n", MQTT_SUB_TOPIC);
-    wifi_command_TCP_transmit(pkt, pkt_len);
-    _delay_ms(300);
 
-    printf("MQTT ready.\n");
+    printf_P(PSTR("CONNACK: 0x%02X 0x%02X 0x%02X 0x%02X\n"),
+             (uint8_t)_rx_buf[0], (uint8_t)_rx_buf[1],
+             (uint8_t)_rx_buf[2], (uint8_t)_rx_buf[3]);
+
+    /* 0x20 = CONNACK, 0x02 = remaining length,
+       0x00 = no session present, 0x00 = accepted             */
+    if ((uint8_t)_rx_buf[0] != 0x20)
+    {
+        printf_P(PSTR("Not a CONNACK (0x%02X)\n"), (uint8_t)_rx_buf[0]);
+        return 0;
+    }
+    if ((uint8_t)_rx_buf[3] != 0x00)
+    {
+        printf_P(PSTR("CONNACK rejected, code: 0x%02X\n"), (uint8_t)_rx_buf[3]);
+        /* Return codes:
+           0x01 = wrong protocol version
+           0x02 = client ID rejected
+           0x03 = server unavailable
+           0x04 = bad username/password
+           0x05 = not authorised                               */
+        return 0;
+    }
+    printf_P(PSTR("CONNACK OK\n"));
+
+    /* --- Send SUBSCRIBE ------------------------------------------- */
+    _rx_ready = 0;
+    _rx_buf[0] = '\0';
+
+    pkt_len = mqtt_build_subscribe(pkt, sizeof(pkt), _sub_topic, 1);
+    if (!pkt_len)
+    {
+        printf_P(PSTR("SUBSCRIBE build fail\n"));
+        return 0;
+    }
+
+    printf_P(PSTR("Subscribing: %s\n"), _sub_topic);
+    wifi_command_TCP_transmit(pkt, pkt_len);
+
+    /* Wait for SUBACK */
+    for (uint16_t i = 0; i < 200; i++)
+    {
+        _delay_ms(10);
+        if (_rx_ready)
+            break;
+    }
+
+    if (_rx_ready && (uint8_t)_rx_buf[0] == 0x90)
+        printf_P(PSTR("SUBACK OK\n"));
+    else
+        printf_P(PSTR("No SUBACK (continuing anyway)\n"));
+
+    printf_P(PSTR("MQTT connected\n"));
     _mqtt_connected = 1;
     _seconds_since_ping = 0;
     return 1;
 }
 
+/* ------------------------------------------------------------------ */
+/*  Publish                                                             */
+/* ------------------------------------------------------------------ */
+
 uint8_t mqtt_raw_publish(const char *payload)
 {
     uint8_t pkt[198];
-    uint8_t pkt_len = mqtt_build_publish(pkt, sizeof(pkt), MQTT_PUB_TOPIC, payload);
+    uint8_t pkt_len = mqtt_build_publish(pkt, sizeof(pkt), _pub_topic, payload);
     if (pkt_len == 0)
     {
-        printf("PUBLISH build failed.\n");
+        printf_P(PSTR("Publish build fail\n"));
         return 0;
     }
-    if (wifi_command_TCP_transmit(pkt, pkt_len) != WIFI_OK)
+
+    printf_P(PSTR("Publishing %d bytes\n"), pkt_len);
+    WIFI_ERROR_MESSAGE_t result = wifi_command_TCP_transmit(pkt, pkt_len);
+    if (result != WIFI_OK)
     {
-        printf("TCP transmit failed.\n");
         _mqtt_connected = 0;
         return 0;
     }
     return 1;
 }
+
+/* ------------------------------------------------------------------ */
+/*  Handle incoming MQTT messages                                       */
+/* ------------------------------------------------------------------ */
 
 void mqtt_handle_incoming(void)
 {
@@ -207,21 +334,23 @@ void mqtt_handle_incoming(void)
     _rx_ready = 0;
 
     uint8_t *data = (uint8_t *)_rx_buf;
+    printf_P(PSTR("Incoming: 0x%02X\n"), data[0]);
 
     if (data[0] == 0x30)
     {
-        uint8_t remaining   = data[1];
-        uint8_t topic_len   = (data[2] << 8) | data[3];
+        /* PUBLISH from broker */
+        uint8_t remaining = data[1];
+        uint8_t topic_len = (data[2] << 8) | data[3];
         if (topic_len < remaining)
         {
-            uint8_t payload_offset = 2 + 2 + topic_len;
-            uint8_t payload_len    = remaining - 2 - topic_len;
-            char payload_str[64]   = {0};
+            uint8_t payload_offset = 4 + topic_len;
+            uint8_t payload_len = remaining - 2 - topic_len;
+            char payload_str[64] = {0};
             if (payload_len >= sizeof(payload_str))
                 payload_len = sizeof(payload_str) - 1;
             memcpy(payload_str, &_rx_buf[payload_offset], payload_len);
             payload_str[payload_len] = '\0';
-            printf("CMD received: %s\n", payload_str);
+            printf_P(PSTR("CMD: %s\n"), payload_str);
 
             if (strcmp(payload_str, "led_on") == 0)
                 led_on(1);
@@ -237,19 +366,26 @@ void mqtt_handle_incoming(void)
         }
     }
     else if (data[0] == 0x20)
-        printf("CONNACK received.\n");
+        printf_P(PSTR("CONNACK\n"));
     else if (data[0] == 0x90)
-        printf("SUBACK received.\n");
+        printf_P(PSTR("SUBACK\n"));
     else if (data[0] == 0xD0)
-        printf("PINGRESP received.\n");
+        printf_P(PSTR("PINGRESP\n"));
+    else
+        printf_P(PSTR("Unknown: 0x%02X\n"), data[0]);
 
     _rx_buf[0] = '\0';
 }
+
+/* ------------------------------------------------------------------ */
+/*  Ping / keepalive                                                    */
+/* ------------------------------------------------------------------ */
 
 void mqtt_send_ping(void)
 {
     uint8_t ping[2];
     mqtt_build_pingreq(ping);
+    printf_P(PSTR("PING\n"));
     wifi_command_TCP_transmit(ping, 2);
 }
 
