@@ -14,7 +14,7 @@ static uint8_t  _mqtt_connected      = 0;
 static uint16_t _seconds_since_ping  = 0;
 static char     _rx_buf[128]         = {0};
 static volatile uint8_t _rx_ready   = 0;
-static char     _device_mac[18]      = "84:f3:eb:95:b4:b3";
+char     _device_mac[18]      = "84:f3:eb:95:b4:b3";
 
 // ─── RX Callback ─────────────────────────────────────────────────────────────
 static void tcp_rx_callback(void)
