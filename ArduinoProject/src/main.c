@@ -1,7 +1,10 @@
 #include <avr/io.h>
 #include <avr/interrupt.h>
+#include <avr/wdt.h>
+#include <avr/pgmspace.h>
 #include <util/delay.h>
 #include <stdio.h>
+#include <string.h>
 #include "mqtt.h"
 #include "uart_stdio.h"
 #include "led.h"
@@ -16,16 +19,27 @@
 #include "adc.h"
 #include "dht11.h"
 #include "interactive.h"
+#include "eeprom_storage.h"
+#include "captive_portal.h"
+#include "data_server.h"
 
 static uint8_t humidity_integer, humidity_decimal;
 static uint8_t temperature_integer, temperature_decimal;
 
-static void pir_callback(void) { /* handled in loop via pir_get_state */ }
+extern char _device_mac[18];
+
+/* ------------------------------------------------------------------ */
+/*  Main                                                                */
+/* ------------------------------------------------------------------ */
 
 int main(void)
 {
-    // ─── Init ─────────────────────────────────────────────────────────────────
+    MCUSR = 0;
+    wdt_disable();
+
     led_init();
+    led_on(1);
+
     button_init();
     display_init();
     proximity_init();
@@ -36,70 +50,60 @@ int main(void)
     servo_init(PWM_NORMAL);
 
     if (UART_OK != uart_stdio_init(115200))
-    {   
+    {
         led_on(4);
-        while (1) {}
+        while (1)
+        {
+        }
     }
 
+    led_on(2);
     sei();
-    printf("SEP4 IoT Hardware - HiveMQ Cloud\n");
+    printf_P(PSTR("SEP4 IoT Hardware\n"));
+
+    /* Hold button 1 at boot to wipe saved WiFi credentials */
+    if (button_get(1))
+    {
+        char empty[64] = {0};
+        save_credentials(empty, empty);
+        printf_P(PSTR("Credentials wiped! Rebooting...\n"));
+        _delay_ms(1000);
+        software_reset();
+    }
 
     if (button_get(2))
         interactive_demo();
 
-    mqtt_raw_connect();
+    /* Hold button 3 at boot to start TCP data export server */
+    if (button_get(3))
+        data_server_run(); /* never returns */
 
-    // ─── Main Loop ────────────────────────────────────────────────────────────
+    /* ----------------------------------------------------------------
+       No button pressed - run sensor loop over USB serial.
+       plantify_logger.py will pick this up automatically.
+    ---------------------------------------------------------------- */
+    printf_P(PSTR("Running in serial sensor mode\n"));
+
+    /* Init sensors */
     while (1)
     {
         uint16_t light_value, soil_value, distance_mm;
-        uint8_t  motion;
-        char     payload[128];
+        uint8_t motion;
 
-        // Read sensors
         dht11_get(&humidity_integer, &humidity_decimal,
                   &temperature_integer, &temperature_decimal);
-        light_value  = light_measure_raw();
-        soil_value   = soil_measure_percentage(ADC_PK0);
-        distance_mm  = proximity_measure();
-        motion       = (pir_get_state() != PIR_NO_MOTION) ? 1 : 0;
+        light_value = light_measure_raw();
+        soil_value = soil_measure_percentage(ADC_PK0);
+        distance_mm = proximity_measure();
+        motion = (pir_get_state() != PIR_NO_MOTION) ? 1 : 0;
 
-        printf("T:%u.%uC H:%u.%u%% L:%u S:%u D:%u M:%u\n",
-               temperature_integer, temperature_decimal,
-               humidity_integer,    humidity_decimal,
-               light_value, soil_value, distance_mm, motion);
+        printf_P(PSTR("T:%u.%uC H:%u.%u%% L:%u S:%u D:%u M:%u\n"),
+                 temperature_integer, temperature_decimal,
+                 humidity_integer, humidity_decimal,
+                 light_value, soil_value, distance_mm, motion);
 
         display_int((temperature_integer * 10) + temperature_decimal);
 
-        mqtt_handle_incoming();
-
-        if (mqtt_is_connected())
-        {
-            snprintf(payload, sizeof(payload),
-                     "{\"mac\":\"%s\",\"temp\":%u.%u,\"hum\":%u.%u,"
-                     "\"light\":%u,\"soil\":%u,\"dist\":%u,\"motion\":%u}",
-                     _device_mac,
-                     temperature_integer, temperature_decimal,
-                     humidity_integer,    humidity_decimal,
-                     light_value, soil_value, distance_mm, motion);
-
-            if (!mqtt_raw_publish(payload))
-            {
-                printf("Publish failed. Reconnecting...\n");
-                wifi_command_close_TCP_connection();
-                _delay_ms(1000);
-                mqtt_raw_connect();
-            }
-
-            mqtt_tick(3);
-        }
-        else
-        {
-            printf("MQTT offline. Retrying...\n");
-            _delay_ms(1000);
-            mqtt_raw_connect();
-        }
-
-        _delay_ms(3000);
+        _delay_ms(1000);
     }
 }
