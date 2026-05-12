@@ -2,18 +2,18 @@
 #include "wifi.h"
 #include "eeprom_storage.h"
 #include <avr/wdt.h>
+#include <avr/pgmspace.h>
 #include <util/delay.h>
 #include <stdio.h>
 #include <string.h>
 #include "uart.h"
 
-#define PORTAL_SSID "PlantPot-Setup"
+#define PORTAL_SSID    "PlantPot-Setup"
 #define PORTAL_RX_SIZE 768
 
-static char portal_rx_buf[PORTAL_RX_SIZE];
-static char portal_html[400];
+static char             portal_rx_buf[PORTAL_RX_SIZE];
 static volatile uint8_t portal_rx_ready = 0;
-static uint8_t waiting_for_body = 0;
+static uint8_t          waiting_for_body = 0;
 
 static void close_connection(void);
 
@@ -31,10 +31,10 @@ void software_reset(void)
 
 static void parse_body(char *body)
 {
-    char ssid[32] = {0};
+    char ssid[32]     = {0};
     char password[64] = {0};
 
-    printf("Parsing body: '%s'\n", body);
+    printf_P(PSTR("Parsing body: '%s'\n"), body);
 
     char *ssid_start = strstr(body, "ssid=");
     if (ssid_start)
@@ -57,7 +57,7 @@ static void parse_body(char *body)
         }
     }
     else
-        printf("ERROR: ssid= not found\n");
+        printf_P(PSTR("ERROR: ssid= not found\n"));
 
     char *pass_start = strstr(body, "pass=");
     if (pass_start)
@@ -69,10 +69,10 @@ static void parse_body(char *body)
         strncpy(password, pass_start, len);
     }
     else
-        printf("ERROR: pass= not found\n");
+        printf_P(PSTR("ERROR: pass= not found\n"));
 
-    printf("SSID: '%s'\n", ssid);
-    printf("Pass: '%s'\n", password);
+    printf_P(PSTR("SSID: '%s'\n"), ssid);
+    printf_P(PSTR("Pass: '%s'\n"), password);
 
     if (ssid[0] != '\0')
     {
@@ -81,10 +81,10 @@ static void parse_body(char *body)
         char v_ssid[32] = {0};
         char v_pass[64] = {0};
         load_credentials(v_ssid, v_pass);
-        printf("Verified SSID: '%s'\n", v_ssid);
-        printf("Verified Pass: '%s'\n", v_pass);
+        printf_P(PSTR("Verified SSID: '%s'\n"), v_ssid);
+        printf_P(PSTR("Verified Pass: '%s'\n"), v_pass);
 
-        char *success =
+        static const char success[] =
             "HTTP/1.1 200 OK\r\n"
             "Content-Type: text/html\r\n"
             "Content-Length: 40\r\n"
@@ -93,14 +93,15 @@ static void parse_body(char *body)
 
         wifi_command_TCP_server_transmit(wifi_get_last_conn_id(),
                                          (uint8_t *)success, strlen(success));
+        _delay_ms(500);
         close_connection();
         _delay_ms(1000);
-        printf("Rebooting...\n");
+        printf_P(PSTR("Rebooting...\n"));
         software_reset();
     }
     else
     {
-        printf("SSID empty\n");
+        printf_P(PSTR("SSID empty\n"));
         close_connection();
     }
 }
@@ -127,14 +128,14 @@ static void send_html(void)
                             "%s",
                             body_len, body);
 
-    printf("Sending %u bytes to conn %d\n", pos, wifi_get_last_conn_id());
+    printf_P(PSTR("Sending %u bytes to conn %d\n"), pos, wifi_get_last_conn_id());
     wifi_command_TCP_server_transmit(
         wifi_get_last_conn_id(), (uint8_t *)response, pos);
 }
 
 static void close_connection(void)
 {
-    printf("Closing conn %d\n", wifi_get_last_conn_id());
+    printf_P(PSTR("Closing conn %d\n"), wifi_get_last_conn_id());
     char cmd[24];
     snprintf(cmd, sizeof(cmd), "AT+CIPCLOSE=%d\r\n", wifi_get_last_conn_id());
     uart_send_string_blocking(UART2_ID, cmd);
@@ -143,50 +144,45 @@ static void close_connection(void)
 
 void start_captive_portal(void)
 {
-    printf("Starting portal...\n");
+    printf_P(PSTR("Starting portal...\n"));
 
-    wifi_command_AT();
-    wifi_command_disable_echo();
+    printf_P(PSTR("AT...\n"));
+    printf_P(PSTR("AT=%d\n"), wifi_command_AT());
 
-    // disable auto-connect and disconnect from any current network
-    wifi_command("AT+CWAUTOCONN=0", 2);
-    wifi_command("AT+CWQAP", 2);
+    printf_P(PSTR("ATE0...\n"));
+    printf_P(PSTR("ATE0=%d\n"), wifi_command_disable_echo());
+
+    printf_P(PSTR("AUTOCONN=0...\n"));
+    printf_P(PSTR("AUTOCONN=%d\n"), wifi_command("AT+CWAUTOCONN=0", 2));
+
+    printf_P(PSTR("CWQAP...\n"));
+    printf_P(PSTR("CWQAP=%d\n"), wifi_command("AT+CWQAP", 2));
     _delay_ms(500);
 
-    uint8_t ap_ok = 0;
-    for (uint8_t attempt = 0; attempt < 3; attempt++)
-    {
-        printf("AP setup attempt %d\n", attempt + 1);
+    printf_P(PSTR("CWMODE=3...\n"));
+    printf_P(PSTR("CWMODE=%d\n"), wifi_command("AT+CWMODE=3", 3));
+    _delay_ms(2000);
 
-        wifi_command("AT+CWMODE=3", 3);
-        _delay_ms(2000);
+    printf_P(PSTR("CWDHCP...\n"));
+    printf_P(PSTR("CWDHCP=%d\n"), wifi_command("AT+CWDHCP=1,1", 2));
 
-        uart_send_string_blocking(UART2_ID, "AT+CWSAP=\"PlantPot-Setup\",\"\",5,0\r\n");
-        _delay_ms(3000);
+    printf_P(PSTR("CIPMUX...\n"));
+    printf_P(PSTR("CIPMUX=%d\n"), wifi_command("AT+CIPMUX=1", 2));
 
-        if (wifi_command("AT+CWMODE?", 2) == WIFI_OK)
-        {
-            ap_ok = 1;
-            printf("AP setup OK\n");
-            break;
-        }
-        _delay_ms(1000);
-    }
-
-    if (!ap_ok)
-    {
-        printf("AP setup failed - resetting\n");
-        software_reset();
-    }
-
-    wifi_command("AT+CIPSERVER=0", 2);
+    printf_P(PSTR("CIPSERVER=0...\n"));
+    printf_P(PSTR("CIPSERVER0=%d\n"), wifi_command("AT+CIPSERVER=0", 2));
     _delay_ms(500);
 
+    printf_P(PSTR("CWSAP...\n"));
+    uart_send_string_blocking(UART2_ID, "AT+CWSAP=\"PlantPot-Setup\",\"\",5,0\r\n");
+    _delay_ms(3000);
+
+    printf_P(PSTR("TCP server...\n"));
     wifi_command_start_TCP_server(portal_rx_callback, portal_rx_buf, PORTAL_RX_SIZE);
     _delay_ms(1000);
 
-    printf("Portal running - connect to '%s'\n", PORTAL_SSID);
-    printf("Open browser: 192.168.4.1\n");
+    printf_P(PSTR("Portal running - connect to '%s'\n"), PORTAL_SSID);
+    printf_P(PSTR("Open browser: http://192.168.4.1\n"));
 
     portal_rx_ready  = 0;
     waiting_for_body = 0;
@@ -196,19 +192,19 @@ void start_captive_portal(void)
         if (portal_rx_ready)
         {
             portal_rx_ready = 0;
-            printf("Request received\n");
+            printf_P(PSTR("Request received\n"));
 
             if (waiting_for_body)
             {
                 if (strstr(portal_rx_buf, "ssid=") != NULL)
                 {
                     waiting_for_body = 0;
-                    printf("Found body: '%s'\n", portal_rx_buf);
+                    printf_P(PSTR("Found body: '%s'\n"), portal_rx_buf);
                     parse_body(portal_rx_buf);
                 }
                 else
                 {
-                    printf("Still waiting for body...\n");
+                    printf_P(PSTR("Still waiting for body...\n"));
                 }
             }
             else if (strstr(portal_rx_buf, "POST /save") != NULL)
@@ -216,20 +212,23 @@ void start_captive_portal(void)
                 if (strstr(portal_rx_buf, "ssid=") != NULL)
                 {
                     char *body = strstr(portal_rx_buf, "ssid=");
-                    printf("Body in same packet\n");
+                    printf_P(PSTR("Body in same packet\n"));
                     parse_body(body);
                 }
                 else
                 {
-                    printf("Waiting for body...\n");
+                    printf_P(PSTR("Waiting for body...\n"));
                     waiting_for_body = 1;
                 }
             }
             else if (strstr(portal_rx_buf, "GET /favicon.ico") != NULL)
+            {
                 close_connection();
+            }
             else if (strstr(portal_rx_buf, "GET /") != NULL)
             {
                 send_html();
+                _delay_ms(500);
                 close_connection();
             }
 
