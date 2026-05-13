@@ -1,74 +1,74 @@
 /***********************************************
  * tone.c
  *  Implementation for the speaker/buzzer driver
- *  connected to the microcontroller. 
- *  This driver uses Timer2 to generate square waves 
+ *  connected to the microcontroller.
+ *  This driver uses Timer2 to generate square waves
  *  at the desired frequency for the specified duration.
- * 
+ *
  *  Author:  Unknown
  *  Date:    Unknown
- * 
+ *
  *  Refactored by: Erland Larsen
  *  Date:    2026-03-17
  *  Project: SPE4_API
  **********************************************/
 #include "tone.h"
 #include <avr/io.h>
-//#include <util/delay.h>
+// #include <util/delay.h>
 
 #define BUZ_BIT PA7
 #define BUZ_DDR DDRA
 #define BUZ_PORT PORTA
 
-void tone_play(uint16_t frequency, uint16_t duration) 
+void tone_play(uint16_t frequency, uint16_t duration)
 {
     uint8_t prescaler_bits = 0;
     uint16_t prescaler_value = 0;
     uint16_t num_ticks = 0;
 
     // Set BUZ_BIT as output
-    BUZ_DDR|=(1<<BUZ_BIT);
+    BUZ_DDR |= (1 << BUZ_BIT);
 
     // Calculate the half-period delay in microseconds
     uint16_t delay_us = 500000 / frequency;
 
     // Calculate the number of cycles needed for the specified duration
-    uint16_t duration_loop = (uint16_t) ((uint32_t) duration * 1000 / (2 * delay_us));
+    uint16_t duration_loop = (uint16_t)((uint32_t)duration * 1000 / (2 * delay_us));
 
     // Initialize Timer in normal mode
     TCCR2A = 0;
     TCCR2B = 0;
 
     // Choose prescaler based on delay
-    if (delay_us > 4000) 
+    if (delay_us > 4000)
     {
         prescaler_bits = (1 << CS22) | (1 << CS21) | (1 << CS20); // 1024
         prescaler_value = 1024;
-    } 
-    else if (delay_us > 2000) 
+    }
+    else if (delay_us > 2000)
     {
         prescaler_bits = (1 << CS22) | (1 << CS21); // 256
         prescaler_value = 256;
-    } 
-    else if (delay_us > 1000) 
+    }
+    else if (delay_us > 1000)
     {
         prescaler_bits = (1 << CS22) | (1 << CS20); // 128
         prescaler_value = 128;
-    } 
-    else if (delay_us >500) 
+    }
+    else if (delay_us > 500)
     {
         prescaler_bits = (1 << CS22); // 64
         prescaler_value = 64;
-    } 
-    else if (delay_us >125) 
+    }
+    else if (delay_us > 125)
     {
-        prescaler_bits = (1 << CS21)| (1 << CS20); //32
+        prescaler_bits = (1 << CS21) | (1 << CS20); // 32
         prescaler_value = 32;
     }
     else
     {
-       prescaler_bits = (1 << CS21) ; // 8
-       prescaler_value = 8;
+        prescaler_bits = (1 << CS21); // 8
+        prescaler_value = 8;
     }
 
     // Set the prescaler
@@ -78,7 +78,7 @@ void tone_play(uint16_t frequency, uint16_t duration)
     num_ticks = (F_CPU / 1000000UL) * delay_us / prescaler_value;
 
     // Generate the tone
-    for (uint16_t i = 0; i < duration_loop; i++) 
+    for (uint16_t i = 0; i < duration_loop; i++)
     {
         // Set BUZ_BIT high
         BUZ_PORT |= (1 << BUZ_BIT);
@@ -86,7 +86,7 @@ void tone_play(uint16_t frequency, uint16_t duration)
         TCNT2 = 0;
 
         // Wait until the timer counter reaches the required ticks
-        while (TCNT2 < num_ticks) 
+        while (TCNT2 < num_ticks)
         {
             // Busy-wait
         }
@@ -97,7 +97,7 @@ void tone_play(uint16_t frequency, uint16_t duration)
         TCNT2 = 0;
 
         // Wait until the timer counter reaches the required ticks
-        while (TCNT2 < num_ticks) 
+        while (TCNT2 < num_ticks)
         {
             // Busy-wait
         }
@@ -106,28 +106,58 @@ void tone_play(uint16_t frequency, uint16_t duration)
     TCCR2B = 0;
 
     // Set BUZ_BIT as input to turn off the buzzer
-    BUZ_DDR&=~(1<<BUZ_BIT);
+    BUZ_DDR &= ~(1 << BUZ_BIT);
 }
 
-void tone_play_starwars()
+void tone_play_startup()
 {
-    tone_play(392, 500);  // G4 for 500 ms
-    tone_play(392, 500);  // G4 for 500 ms
-    tone_play(392, 500);  // G4 for 500 ms
-    tone_play(311, 350);  // E♭4 for 350 ms
-    tone_play(466, 150);  // B4 for 150 ms
-    tone_play(392, 500);  // G4 for 500 ms
-    tone_play(311, 350);  // E♭4 for 350 ms
-    tone_play(466, 150);  // B4 for 150 ms
-    tone_play(392, 1000); // G4 for 1000 ms
+    // --- STIRRING ---
+    tone_play(500, 200); // low, groggy
+    tone_play(600, 200);
+    tone_play(700, 150);
+    tone_play(800, 150);
 
-    tone_play(587, 500);  // D5 for 500 ms
-    tone_play(587, 500);  // D5 for 500 ms
-    tone_play(587, 500);  // D5 for 500 ms
-    tone_play(622, 350);  // D#5 for 350 ms
-    tone_play(466, 150);  // B4 for 150 ms
-    tone_play(370, 500);  // F#4 for 500 ms
-    tone_play(311, 350);  // Eb4 for 350 ms
-    tone_play(466, 150);  // B4 for 150 ms
-    tone_play(392, 1000); // G4 for 1000 ms
+    // --- WAKING UP ---
+    tone_play(1000, 120);
+    tone_play(1200, 120);
+    tone_play(1500, 120);
+
+    // --- ONLINE ---
+    tone_play(2000, 100);
+    tone_play(2500, 100);
+    tone_play(3000, 150); // bright, awake
+    tone_play(3000, 80);  // double tap, confirmed
+}
+
+void tone_play_air_raid()
+{
+    // --- URGENT TRIPLE BEEP ---
+    tone_play(3000, 80);
+    tone_play(3000, 80);
+    tone_play(3000, 80);
+
+    // --- CRITICAL PULSE (faster, more insistent) ---
+    tone_play(3200, 60);
+    tone_play(3200, 60);
+    tone_play(3200, 60);
+    tone_play(3200, 60);
+
+    // --- ALARM SCREAM (continuous high tone) ---
+    tone_play(3500, 600);
+
+    // --- DROP WARNING (something is very wrong) ---
+    tone_play(3500, 80);
+    tone_play(2800, 80);
+    tone_play(3500, 80);
+    tone_play(2800, 80);
+
+    // --- FINAL SUSTAINED CRY ---
+    tone_play(3500, 800);
+}
+
+void tone_play_smoke_detector()
+{
+    tone_play(3000, 80);
+    tone_play(3000, 80);
+    tone_play(3000, 80);
 }

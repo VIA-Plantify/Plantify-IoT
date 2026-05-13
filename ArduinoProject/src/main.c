@@ -57,7 +57,9 @@ int main(void)
     if (UART_OK != uart_stdio_init(115200))
     {
         led_on(4);
-        while (1) {}
+        while (1)
+        {
+        }
     }
 
     led_on(2);
@@ -110,19 +112,19 @@ int main(void)
     while (1)
     {
         uint16_t light_value, soil_value, distance_mm;
-        uint8_t  motion;
-        char     payload[128];
+        uint8_t motion;
+        char payload[128];
 
-        dht11_get(&humidity_integer,    &humidity_decimal,
+        dht11_get(&humidity_integer, &humidity_decimal,
                   &temperature_integer, &temperature_decimal);
-        light_value  = light_measure_raw();
-        soil_value   = soil_measure_percentage(ADC_PK0);
-        distance_mm  = proximity_measure();
-        motion       = (pir_get_state() != PIR_NO_MOTION) ? 1 : 0;
+        light_value = light_measure_raw();
+        soil_value = soil_measure_percentage(ADC_PK0);
+        distance_mm = proximity_measure();
+        motion = (pir_get_state() != PIR_NO_MOTION) ? 1 : 0;
 
         printf_P(PSTR("T:%u.%uC H:%u.%u%% L:%u S:%u D:%u M:%u\n"),
                  temperature_integer, temperature_decimal,
-                 humidity_integer,    humidity_decimal,
+                 humidity_integer, humidity_decimal,
                  light_value, soil_value, distance_mm, motion);
 
         display_int((temperature_integer * 10) + temperature_decimal);
@@ -135,7 +137,7 @@ int main(void)
                      "\"light\":%u,\"soil\":%u,\"dist\":%u,\"motion\":%u}",
                      _device_mac,
                      temperature_integer, temperature_decimal,
-                     humidity_integer,    humidity_decimal,
+                     humidity_integer, humidity_decimal,
                      light_value, soil_value, distance_mm, motion);
 
             if (!mqtt_raw_publish(payload))
