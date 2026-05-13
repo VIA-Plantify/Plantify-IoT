@@ -45,18 +45,18 @@ static uint8_t mqtt_build_connect(uint8_t *buf, uint8_t buf_size,
         return 0;
 
     uint8_t i = 0;
-    buf[i++] = 0x10; /* CONNECT fixed header                */
+    buf[i++] = 0x10;
     buf[i++] = remaining;
-    buf[i++] = 0x00; /* Protocol name length MSB            */
-    buf[i++] = 0x04; /* Protocol name length LSB            */
+    buf[i++] = 0x00;
+    buf[i++] = 0x04;
     buf[i++] = 'M';
     buf[i++] = 'Q';
     buf[i++] = 'T';
     buf[i++] = 'T';
-    buf[i++] = 0x04; /* Protocol level (3.1.1)              */
-    buf[i++] = 0xC2; /* Connect flags: username+password    */
-    buf[i++] = 0x00; /* Keep-alive MSB                      */
-    buf[i++] = 0x3C; /* Keep-alive LSB (60 seconds)         */
+    buf[i++] = 0x04;
+    buf[i++] = 0xC6;
+    buf[i++] = 0x00;
+    buf[i++] = 0x3C;
     buf[i++] = 0x00;
     buf[i++] = id_len;
     memcpy(&buf[i], client_id, id_len);
@@ -90,7 +90,7 @@ static uint8_t mqtt_build_subscribe(uint8_t *buf, uint8_t buf_size,
     buf[i++] = topic_len;
     memcpy(&buf[i], topic, topic_len);
     i += topic_len;
-    buf[i++] = 0x00; /* QoS 0                               */
+    buf[i++] = 0x00;
     return i;
 }
 
@@ -133,7 +133,6 @@ uint8_t mqtt_raw_connect_with_credentials(char *ssid, char *password)
 
     _mqtt_connected = 0;
 
-    /* --- AT check -------------------------------------------------- */
     printf_P(PSTR("AT check\n"));
     if (wifi_command_AT() != WIFI_OK)
     {
@@ -146,7 +145,6 @@ uint8_t mqtt_raw_connect_with_credentials(char *ssid, char *password)
     wifi_command_set_mode_to_1();
     _delay_ms(500);
 
-    /* --- Join WiFi ------------------------------------------------- */
     printf_P(PSTR("Joining: %s\n"), ssid);
     WIFI_ERROR_MESSAGE_t join = wifi_command_join_AP(ssid, password);
     printf_P(PSTR("Join result: %d\n"), join);
@@ -157,7 +155,6 @@ uint8_t mqtt_raw_connect_with_credentials(char *ssid, char *password)
     }
     _delay_ms(5000);
 
-    /* --- Get MAC and build per-device topics ----------------------- */
     if (wifi_command_get_mac(_device_mac) == WIFI_OK)
         printf_P(PSTR("MAC: %s\n"), _device_mac);
     else
@@ -168,8 +165,6 @@ uint8_t mqtt_raw_connect_with_credentials(char *ssid, char *password)
     printf_P(PSTR("Pub: %s\n"), _pub_topic);
     printf_P(PSTR("Sub: %s\n"), _sub_topic);
 
-    /* FIX: unique client ID per device prevents HiveMQ from kicking
-       a second device that connects with the same ID               */
     char client_id[32];
     char clean_mac[13] = {0};
     uint8_t j = 0;
@@ -178,7 +173,6 @@ uint8_t mqtt_raw_connect_with_credentials(char *ssid, char *password)
             clean_mac[j++] = _device_mac[i];
     snprintf(client_id, sizeof(client_id), "plantpot_%s", clean_mac);
 
-    /* --- Open SSL connection --------------------------------------- */
     printf_P(PSTR("SSL connecting...\n"));
     _rx_buf[0] = '\0';
     _rx_ready = 0;
@@ -205,10 +199,6 @@ uint8_t mqtt_raw_connect_with_credentials(char *ssid, char *password)
         return 0;
     }
 
-    /* The 4-second TLS handshake wait is already inside
-       wifi_command_create_SSL_connection — no extra delay needed here */
-
-    /* --- Send MQTT CONNECT ---------------------------------------- */
     pkt_len = mqtt_build_connect(pkt, sizeof(pkt), client_id,
                                  MQTT_USERNAME, MQTT_PASSWORD);
     if (!pkt_len)
@@ -227,7 +217,6 @@ uint8_t mqtt_raw_connect_with_credentials(char *ssid, char *password)
     printf_P(PSTR("\n"));
     wifi_command_TCP_transmit(pkt, pkt_len);
 
-    /* Wait for CONNACK — broker must respond within 3 seconds        */
     for (uint16_t i = 0; i < 300; i++)
     {
         _delay_ms(10);
@@ -235,7 +224,6 @@ uint8_t mqtt_raw_connect_with_credentials(char *ssid, char *password)
             break;
     }
 
-    /* --- Verify CONNACK ------------------------------------------- */
     if (!_rx_ready)
     {
         printf_P(PSTR("CONNACK timeout\n"));
@@ -246,8 +234,6 @@ uint8_t mqtt_raw_connect_with_credentials(char *ssid, char *password)
              (uint8_t)_rx_buf[0], (uint8_t)_rx_buf[1],
              (uint8_t)_rx_buf[2], (uint8_t)_rx_buf[3]);
 
-    /* 0x20 = CONNACK, 0x02 = remaining length,
-       0x00 = no session present, 0x00 = accepted             */
     if ((uint8_t)_rx_buf[0] != 0x20)
     {
         printf_P(PSTR("Not a CONNACK (0x%02X)\n"), (uint8_t)_rx_buf[0]);
@@ -256,17 +242,10 @@ uint8_t mqtt_raw_connect_with_credentials(char *ssid, char *password)
     if ((uint8_t)_rx_buf[3] != 0x00)
     {
         printf_P(PSTR("CONNACK rejected, code: 0x%02X\n"), (uint8_t)_rx_buf[3]);
-        /* Return codes:
-           0x01 = wrong protocol version
-           0x02 = client ID rejected
-           0x03 = server unavailable
-           0x04 = bad username/password
-           0x05 = not authorised                               */
         return 0;
     }
     printf_P(PSTR("CONNACK OK\n"));
 
-    /* --- Send SUBSCRIBE ------------------------------------------- */
     _rx_ready = 0;
     _rx_buf[0] = '\0';
 
@@ -280,7 +259,6 @@ uint8_t mqtt_raw_connect_with_credentials(char *ssid, char *password)
     printf_P(PSTR("Subscribing: %s\n"), _sub_topic);
     wifi_command_TCP_transmit(pkt, pkt_len);
 
-    /* Wait for SUBACK */
     for (uint16_t i = 0; i < 200; i++)
     {
         _delay_ms(10);
@@ -338,7 +316,6 @@ void mqtt_handle_incoming(void)
 
     if (data[0] == 0x30)
     {
-        /* PUBLISH from broker */
         uint8_t remaining = data[1];
         uint8_t topic_len = (data[2] << 8) | data[3];
         if (topic_len < remaining)
@@ -402,4 +379,77 @@ void mqtt_tick(uint8_t elapsed_seconds)
         mqtt_send_ping();
         _seconds_since_ping = 0;
     }
+}
+
+/* ------------------------------------------------------------------ */
+/*  Simple test — plain TCP to public broker on port 80                */
+/* ------------------------------------------------------------------ */
+
+void mqtt_test_simple(void)
+{
+    printf_P(PSTR("=== Simple MQTT test ===\n"));
+
+    printf_P(PSTR("AT...\n"));
+    printf_P(PSTR("AT=%d\n"), wifi_command_AT());
+
+    printf_P(PSTR("ATE0...\n"));
+    printf_P(PSTR("ATE0=%d\n"), wifi_command_disable_echo());
+
+    printf_P(PSTR("CWMODE=1...\n"));
+    printf_P(PSTR("CWMODE=%d\n"), wifi_command("AT+CWMODE=1", 2));
+    _delay_ms(500);
+
+    printf_P(PSTR("Joining WiFi...\n"));
+    WIFI_ERROR_MESSAGE_t join = wifi_command_join_AP("iPhone", "Print2021");
+    printf_P(PSTR("Join=%d\n"), join);
+    if (join != WIFI_OK)
+    {
+        printf_P(PSTR("WiFi join failed - stopping\n"));
+        return;
+    }
+    _delay_ms(5000);
+
+    printf_P(PSTR("Checking IP...\n"));
+    printf_P(PSTR("CIFSR=%d\n"), wifi_command("AT+CIFSR", 3));
+
+    printf_P(PSTR("Closing any existing connection...\n"));
+    wifi_command("AT+CIPCLOSE", 3);
+    _delay_ms(500);
+
+    /* test.mosquitto.org listens for plain MQTT on port 80 */
+    printf_P(PSTR("Connecting to: test.mosquitto.org:80\n"));
+    char cmd[64];
+    snprintf(cmd, sizeof(cmd), "AT+CIPSTART=\"TCP\",\"test.mosquitto.org\",80");
+    WIFI_ERROR_MESSAGE_t tcp = wifi_command(cmd, 30);
+    printf_P(PSTR("CIPSTART=%d\n"), tcp);
+    if (tcp != WIFI_OK)
+    {
+        printf_P(PSTR("TCP connect failed - stopping\n"));
+        return;
+    }
+
+    printf_P(PSTR("TCP connected!\n"));
+    _delay_ms(500);
+
+    /* Minimal MQTT CONNECT: client ID "t1", no credentials, clean session */
+    uint8_t pkt[] = {
+        0x10, 0x0C,
+        0x00, 0x04,
+        'M', 'Q', 'T', 'T',
+        0x04,
+        0x02,
+        0x00, 0x3C,
+        0x00, 0x02,
+        't', '1'
+    };
+
+    printf_P(PSTR("Packet hex:\n"));
+    for (uint8_t i = 0; i < sizeof(pkt); i++)
+        printf_P(PSTR("%02X "), pkt[i]);
+    printf_P(PSTR("\n"));
+
+    printf_P(PSTR("Sending MQTT CONNECT...\n"));
+    wifi_command_TCP_transmit_direct(pkt, sizeof(pkt));
+
+    printf_P(PSTR("=== Test done ===\n"));
 }

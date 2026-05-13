@@ -38,3 +38,4 @@ WIFI_ERROR_MESSAGE_t wifi_command_start_TCP_server(WIFI_TCP_Callback_t callback_
                                                    char *received_message_buffer,
                                                    uint16_t buffer_size);
 WIFI_ERROR_MESSAGE_t wifi_command_TCP_server_transmit(uint8_t conn_id, uint8_t *data, uint16_t length);
+void wifi_print_gmr(void);

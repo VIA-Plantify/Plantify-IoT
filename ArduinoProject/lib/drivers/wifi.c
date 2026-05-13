@@ -82,7 +82,7 @@ static void wifi_TCP_callback(uint8_t byte)
             length = length * 10 + (byte - '0');
         else if (byte == ',')
         {
-            last_conn_id = (uint8_t)length; // save connection ID
+            last_conn_id = (uint8_t)length;
             length = 0;
         }
         else if (byte == ':')
@@ -98,6 +98,8 @@ static void wifi_TCP_callback(uint8_t byte)
         break;
 
     case DATA:
+        if (index == 0)
+            printf_P(PSTR("IPD data arriving!\n"));
         if (index < length)
         {
             if (received_message_buffer_max_size == 0 ||
@@ -286,6 +288,9 @@ WIFI_ERROR_MESSAGE_t wifi_command_create_SSL_connection(char *IP, uint16_t port,
     char portString[7];
 
     wifi_command("AT+CIPSSLSIZE=4096", 5);
+    wifi_command("AT+CIPSNI=1", 2);
+    wifi_command("AT+CIPSSL=1", 2);   // ensure SSL mode on
+    wifi_command("AT+CIPDINFO=0", 2); // cleaner IPD format
 
     strcpy(sendbuffer, "AT+CIPSTART=\"SSL\",\"");
     strcat(sendbuffer, IP);
@@ -295,8 +300,7 @@ WIFI_ERROR_MESSAGE_t wifi_command_create_SSL_connection(char *IP, uint16_t port,
 
     WIFI_ERROR_MESSAGE_t errorMessage = wifi_command(sendbuffer, 30);
 
-    // ADD THIS LINE:
-    printf("SSL resp: %d\n", errorMessage);
+    printf_P(PSTR("SSL resp: %d\n"), errorMessage);
 
     if (errorMessage == WIFI_OK)
         _callback = wifi_TCP_callback;
@@ -314,28 +318,28 @@ WIFI_ERROR_MESSAGE_t wifi_command_TCP_transmit(uint8_t *data, uint16_t length)
     snprintf(sendbuffer, sizeof(sendbuffer), "AT+CIPSEND=%u\r\n", length);
     uart_send_string_blocking(UART2_ID, sendbuffer);
 
-    /* Wait up to 2 seconds for '>' prompt */
     uint8_t got_prompt = 0;
     for (uint16_t i = 0; i < 200; i++)
     {
         _delay_ms(10);
-        if (wifi_dataBufferIndex > 0 &&
-            wifi_dataBuffer[wifi_dataBufferIndex - 1] == '>')
+        if (wifi_dataBufferIndex > 1 &&
+            wifi_dataBuffer[wifi_dataBufferIndex - 2] == '>' &&
+            wifi_dataBuffer[wifi_dataBufferIndex - 1] == ' ')
         {
             got_prompt = 1;
             break;
         }
     }
 
-    /* DEBUG: show what we got */
-    printf_P(PSTR("prompt_got=%d buf=[ "));
+    printf_P(PSTR("prompt_got=%d buf=[ "), got_prompt);
     for (uint8_t i = 0; i < wifi_dataBufferIndex; i++)
         printf_P(PSTR("%02X "), wifi_dataBuffer[i]);
     printf_P(PSTR("]\n"));
 
     wifi_clear_databuffer_and_index();
+
+    /* Restore BEFORE sending so CONNACK bytes go to TCP state machine */
     _callback = saved_callback;
-    _delay_ms(50);
 
     if (!got_prompt)
     {
@@ -344,7 +348,16 @@ WIFI_ERROR_MESSAGE_t wifi_command_TCP_transmit(uint8_t *data, uint16_t length)
     }
 
     uart_write_bytes(UART2_ID, data, length);
-    _delay_ms(100);
+
+    /* Capture whatever the ESP sends back after the data */
+    _callback = wifi_command_callback;
+    _delay_ms(2000);
+    printf_P(PSTR("after_send=[ "));
+    for (uint8_t i = 0; i < wifi_dataBufferIndex; i++)
+        printf_P(PSTR("%02X "), wifi_dataBuffer[i]);
+    printf_P(PSTR("]\n"));
+    wifi_clear_databuffer_and_index();
+    _callback = saved_callback;
 
     return WIFI_OK;
 }
@@ -415,38 +428,79 @@ WIFI_ERROR_MESSAGE_t wifi_command_start_TCP_server(WIFI_TCP_Callback_t callback_
 
 WIFI_ERROR_MESSAGE_t wifi_command_TCP_server_transmit(uint8_t conn_id, uint8_t *data, uint16_t length)
 {
+    void (*saved_callback)(uint8_t) = _callback;
+    _callback = wifi_command_callback;
+
     char sendbuffer[32];
     snprintf(sendbuffer, sizeof(sendbuffer), "AT+CIPSEND=%u,%u\r\n", conn_id, length);
     uart_send_string_blocking(UART2_ID, sendbuffer);
 
-    _delay_ms(300);
-
-    // send byte by byte with progress
-    printf("Sending: [");
-    for (uint16_t i = 0; i < length; i++)
+    /* Wait up to 3 seconds for '>' prompt */
+    uint8_t got_prompt = 0;
+    for (uint16_t i = 0; i < 300; i++)
     {
-        uart_write_bytes(UART2_ID, &data[i], 1);
-        if (i % 26 == 0 && i > 0)
-            printf("#");
+        _delay_ms(10);
+        if (wifi_dataBufferIndex > 1 &&
+            wifi_dataBuffer[wifi_dataBufferIndex - 2] == '>' &&
+            wifi_dataBuffer[wifi_dataBufferIndex - 1] == ' ')
+        {
+            got_prompt = 1;
+            break;
+        }
     }
-    printf("] %u bytes\n", length);
 
-    _delay_ms(3000);
+    printf_P(PSTR("prompt_got=%d\n"), got_prompt);
+    wifi_clear_databuffer_and_index();
+    _callback = saved_callback;
+
+    if (!got_prompt)
+    {
+        printf_P(PSTR("NO PROMPT - aborting\n"));
+        return WIFI_FAIL;
+    }
+
+    uart_write_bytes(UART2_ID, data, length);
+    _delay_ms(1000);
 
     return WIFI_OK;
 }
 
 WIFI_ERROR_MESSAGE_t wifi_command_TCP_transmit_direct(uint8_t *data, uint16_t length)
 {
+    void (*saved_callback)(uint8_t) = _callback;
+    _callback = wifi_command_callback;
+
     char sendbuffer[32];
     snprintf(sendbuffer, sizeof(sendbuffer), "AT+CIPSEND=%u\r\n", length);
     uart_send_string_blocking(UART2_ID, sendbuffer);
 
-    _delay_ms(300); // wait for > prompt
+    _delay_ms(1000);
+    printf_P(PSTR("after_cipsend=[ "));
+    for (uint8_t i = 0; i < wifi_dataBufferIndex; i++)
+        printf_P(PSTR("%02X "), wifi_dataBuffer[i]);
+    printf_P(PSTR("]\n"));
+    wifi_clear_databuffer_and_index();
 
     uart_write_bytes(UART2_ID, data, length);
 
-    _delay_ms(1000); // wait for SEND OK
+    _delay_ms(3000);
+    printf_P(PSTR("after_data=[ "));
+    for (uint8_t i = 0; i < wifi_dataBufferIndex; i++)
+        printf_P(PSTR("%02X "), wifi_dataBuffer[i]);
+    printf_P(PSTR("]\n"));
+    wifi_clear_databuffer_and_index();
 
+    _callback = saved_callback;
     return WIFI_OK;
+}
+
+void wifi_print_gmr(void)
+{
+    void (*saved_cb)(uint8_t) = _callback;
+    _callback = wifi_command_callback;
+    uart_send_string_blocking(UART2_ID, "AT+GMR\r\n");
+    _delay_ms(2000);
+    printf_P(PSTR("GMR: %s\n"), (char *)wifi_dataBuffer);
+    wifi_clear_databuffer_and_index();
+    _callback = saved_cb;
 }
