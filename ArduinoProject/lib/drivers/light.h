@@ -1,14 +1,3 @@
-/***********************************************
- * light.h
- *  Interface for the Light Sensor driver.
- *  Functions for the light sensor (KY-018).
- *  NOTE: The light sensor is connected to the ADC channel PK7 on the
- *        microcontroller and is a wrapper around the ADC functions.
- * 
- *  Author:  Erland Larsen
- *  Date:    2026-03-10
- *  Project: SPE4_API
- **********************************************/
 #pragma once
 
 #include "adc.h"
