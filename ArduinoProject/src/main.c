@@ -83,13 +83,26 @@ int main(void)
                      humidity_integer,    humidity_decimal,
                      light_value, soil_value, distance_mm);
 
-            if (!mqtt_raw_publish(payload))
+            /*  Retry publish up to 3 times.
+                On each failure reconnect before retrying so the
+                same payload is sent once the connection is back.     */
+            uint8_t published = 0;
+            for (uint8_t attempt = 0; attempt < 3; attempt++)
             {
-                printf("Publish failed. Reconnecting...\n");
+                if (mqtt_raw_publish(payload))
+                {
+                    published = 1;
+                    break;
+                }
+                printf("Publish failed (attempt %d). Reconnecting...\n",
+                       attempt + 1);
                 wifi_command_close_TCP_connection();
                 _delay_ms(1000);
                 mqtt_raw_connect();
             }
+
+            if (!published)
+                printf("Publish failed after 3 attempts. Skipping.\n");
 
             /*  Wait 5 minutes before the next publish.
                 Loop in 10 s steps so mqtt_tick() can send a PING
