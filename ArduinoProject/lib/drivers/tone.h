@@ -19,3 +19,4 @@ void tone_play(uint16_t frequency, uint16_t duration);
 void tone_play_startup();        // by BetonoMISHAlka
 void tone_play_air_raid();       // by Ukraine Defense Forces
 void tone_play_smoke_detector(); // by Bianca
+void tone_play_wifi_connected(); // by Mace

@@ -161,3 +161,11 @@ void tone_play_smoke_detector()
     tone_play(3000, 80);
     tone_play(3000, 80);
 }
+
+void tone_play_wifi_connected()
+{
+    tone_play(1500, 80);  // tap
+    tone_play(2000, 80);  // step
+    tone_play(2500, 80);  // step
+    tone_play(3000, 200); // connected ✓
+}

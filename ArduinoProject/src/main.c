@@ -18,6 +18,7 @@
 #include "servo.h"
 #include "adc.h"
 #include "dht11.h"
+#include "tone.h"
 #include "interactive.h"
 #include "eeprom_storage.h"
 #include "captive_portal.h"
@@ -65,6 +66,7 @@ int main(void)
     led_on(2);
     sei();
     printf_P(PSTR("SEP4 IoT Hardware\n"));
+    tone_play_startup();
 
     /* Hold button 1 at boot to wipe saved WiFi credentials */
     if (button_get(1))
@@ -106,10 +108,10 @@ int main(void)
         software_reset();
     }
 
-    /* ----------------------------------------------------------------
-       Main sensor loop
-    ---------------------------------------------------------------- */
-    while (1)
+        /* ----------------------------------------------------------------
+           Main sensor loop
+        ---------------------------------------------------------------- */
+        while (1)
     {
         uint16_t light_value, soil_value, distance_mm;
         uint8_t motion;

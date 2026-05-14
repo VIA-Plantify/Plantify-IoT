@@ -2,6 +2,7 @@
 #include "wifi.h"
 #include "led.h"
 #include "buzzer.h"
+#include "tone.h"
 #include "pump.h"
 #include <avr/io.h>
 #include <avr/pgmspace.h>
@@ -154,6 +155,8 @@ uint8_t mqtt_raw_connect_with_credentials(char *ssid, char *password)
         return 0;
     }
     _delay_ms(5000);
+
+    tone_play_wifi_connected();
 
     if (wifi_command_get_mac(_device_mac) == WIFI_OK)
         printf_P(PSTR("MAC: %s\n"), _device_mac);
@@ -440,8 +443,7 @@ void mqtt_test_simple(void)
         0x02,
         0x00, 0x3C,
         0x00, 0x02,
-        't', '1'
-    };
+        't', '1'};
 
     printf_P(PSTR("Packet hex:\n"));
     for (uint8_t i = 0; i < sizeof(pkt); i++)
