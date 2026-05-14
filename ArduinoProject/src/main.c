@@ -15,16 +15,16 @@
 #include "servo.h"
 #include "adc.h"
 #include "dht11.h"
+#include "tone.h"
 #include "interactive.h"
 
-static uint8_t humidity_integer, humidity_decimal;
+static uint8_t humidity_integer,    humidity_decimal;
 static uint8_t temperature_integer, temperature_decimal;
 
-static void pir_callback(void) { /* handled in loop via pir_get_state */ }
+/*  pir_callback is defined in interactive.c                          */
 
 int main(void)
 {
-    // ─── Init ─────────────────────────────────────────────────────────────────
     led_init();
     button_init();
     display_init();
@@ -36,52 +36,52 @@ int main(void)
     servo_init(PWM_NORMAL);
 
     if (UART_OK != uart_stdio_init(115200))
-    {   
+    {
         led_on(4);
         while (1) {}
     }
 
     sei();
-    printf("SEP4 IoT Hardware - HiveMQ Cloud\n");
+    printf("SEP4 IoT Hardware\n");
+    tone_play_startup();
 
     if (button_get(2))
         interactive_demo();
 
     mqtt_raw_connect();
 
-    // ─── Main Loop ────────────────────────────────────────────────────────────
     while (1)
     {
-        uint16_t light_value, soil_value, distance_mm;
-        uint8_t  motion;
+        uint16_t light_raw, light_value, soil_value, distance_mm;
         char     payload[128];
 
-        // Read sensors
-        dht11_get(&humidity_integer, &humidity_decimal,
+        dht11_get(&humidity_integer,    &humidity_decimal,
                   &temperature_integer, &temperature_decimal);
-        light_value  = light_measure_raw();
-        soil_value   = soil_measure_percentage(ADC_PK0);
-        distance_mm  = proximity_measure();
-        motion       = (pir_get_state() != PIR_NO_MOTION) ? 1 : 0;
 
-        printf("T:%u.%uC H:%u.%u%% L:%u S:%u D:%u M:%u\n",
+        /*  Invert light: 0 = dark, 1023 = bright                     */
+        light_raw   = light_measure_raw();
+        light_value = 1023 - light_raw;
+
+        soil_value  = soil_measure_percentage(ADC_PK0);
+        distance_mm = proximity_measure();
+
+        printf("T:%u.%uC H:%u.%u%% L:%u S:%u D:%u\n",
                temperature_integer, temperature_decimal,
                humidity_integer,    humidity_decimal,
-               light_value, soil_value, distance_mm, motion);
+               light_value, soil_value, distance_mm);
 
         display_int((temperature_integer * 10) + temperature_decimal);
-
         mqtt_handle_incoming();
 
         if (mqtt_is_connected())
         {
             snprintf(payload, sizeof(payload),
                      "{\"mac\":\"%s\",\"temp\":%u.%u,\"hum\":%u.%u,"
-                     "\"light\":%u,\"soil\":%u,\"dist\":%u,\"motion\":%u}",
-                     _device_mac,
+                     "\"light\":%u,\"soil\":%u,\"dist\":%u}",
+                     mqtt_get_device_mac(),
                      temperature_integer, temperature_decimal,
                      humidity_integer,    humidity_decimal,
-                     light_value, soil_value, distance_mm, motion);
+                     light_value, soil_value, distance_mm);
 
             if (!mqtt_raw_publish(payload))
             {
@@ -91,7 +91,17 @@ int main(void)
                 mqtt_raw_connect();
             }
 
-            mqtt_tick(3);
+            /*  Wait 5 minutes before the next publish.
+                Loop in 10 s steps so mqtt_tick() can send a PING
+                every 45 s and keep the broker connection alive.
+                mqtt_handle_incoming() catches any commands that
+                arrive during the wait.                               */
+            for (uint16_t s = 0; s < 300; s += 10)
+            {
+                _delay_ms(10000);
+                mqtt_tick(10);
+                mqtt_handle_incoming();
+            }
         }
         else
         {
@@ -99,7 +109,5 @@ int main(void)
             _delay_ms(1000);
             mqtt_raw_connect();
         }
-
-        _delay_ms(3000);
     }
 }
