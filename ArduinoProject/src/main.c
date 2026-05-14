@@ -17,6 +17,7 @@
 #include "dht11.h"
 #include "tone.h"
 #include "interactive.h"
+#include "data_server.h"
 
 static uint8_t humidity_integer, humidity_decimal;
 static uint8_t temperature_integer, temperature_decimal;
@@ -36,7 +37,9 @@ int main(void)
     if (UART_OK != uart_stdio_init(115200))
     {
         led_on(4);
-        while (1) {}
+        while (1)
+        {
+        }
     }
 
     sei();
@@ -46,6 +49,9 @@ int main(void)
 
     if (button_get(2))
         interactive_demo();
+
+    if (button_get(3))
+        data_server_run();
 
     mqtt_raw_connect();
 
