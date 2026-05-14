@@ -52,9 +52,7 @@ int main(void)
     if (UART_OK != uart_stdio_init(115200))
     {
         led_on(4);
-        while (1)
-        {
-        }
+        while (1) {}
     }
 
     led_on(2);
@@ -84,22 +82,24 @@ int main(void)
     ---------------------------------------------------------------- */
     printf_P(PSTR("Running in serial sensor mode\n"));
 
-    /* Init sensors */
     while (1)
     {
-        uint16_t light_value, soil_value, distance_mm;
+        uint16_t light_raw, light_value, soil_value, distance_mm;
         uint8_t motion;
 
         dht11_get(&humidity_integer, &humidity_decimal,
                   &temperature_integer, &temperature_decimal);
-        light_value = light_measure_raw();
-        soil_value = soil_measure_percentage(ADC_PK0);
+
+        light_raw   = light_measure_raw();
+        light_value = 1023 - light_raw;   /* invert: sensor measures darkness */
+
+        soil_value  = soil_measure_percentage(ADC_PK0);
         distance_mm = proximity_measure();
-        motion = (pir_get_state() != PIR_NO_MOTION) ? 1 : 0;
+        motion      = (pir_get_state() != PIR_NO_MOTION) ? 1 : 0;
 
         printf_P(PSTR("T:%u.%uC H:%u.%u%% L:%u S:%u D:%u M:%u\n"),
                  temperature_integer, temperature_decimal,
-                 humidity_integer, humidity_decimal,
+                 humidity_integer,    humidity_decimal,
                  light_value, soil_value, distance_mm, motion);
 
         display_int((temperature_integer * 10) + temperature_decimal);
