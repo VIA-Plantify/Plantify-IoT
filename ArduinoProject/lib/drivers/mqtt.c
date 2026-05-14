@@ -2,6 +2,7 @@
 #include "wifi.h"
 #include "led.h"
 #include "buzzer.h"
+#include "tone.h"
 #include "pump.h"
 #include <avr/io.h>
 #include <avr/pgmspace.h>
@@ -136,6 +137,11 @@ uint8_t mqtt_raw_connect(void)
     }
     _delay_ms(3000);
 
+    /*  Play tone to signal WiFi connected (from ConnectWifi branch)  */
+    tone_play_wifi_connected();
+
+    /*  MAC fetch is mandatory — topics are built from it.
+        Retry once if the first attempt fails.                         */
     _device_mac[0] = '\0';
     if (wifi_command_get_mac(_device_mac) != WIFI_OK || _device_mac[0] == '\0')
     {
@@ -189,10 +195,10 @@ uint8_t mqtt_raw_connect(void)
 
     for (uint16_t i = 0; i < 500; i++) { _delay_ms(10); if (_rx_ready) break; }
 
-    if (!_rx_ready)         { printf("CONNACK timeout.\n");                  return 0; }
-    if (_rx_buf[0] != 0x20) { printf("Not a CONNACK.\n");                    return 0; }
+    if (!_rx_ready)         { printf("CONNACK timeout.\n");             return 0; }
+    if (_rx_buf[0] != 0x20) { printf("Not a CONNACK.\n");               return 0; }
     if (_rx_buf[3] != 0x00) { printf("CONNACK rejected: 0x%02X\n",
-                                      (uint8_t)_rx_buf[3]);                  return 0; }
+                                      (uint8_t)_rx_buf[3]);             return 0; }
     printf("CONNACK OK\n");
 
     _rx_ready  = 0;

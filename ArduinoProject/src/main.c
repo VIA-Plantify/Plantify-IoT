@@ -15,6 +15,7 @@
 #include "servo.h"
 #include "adc.h"
 #include "dht11.h"
+#include "tone.h"
 #include "interactive.h"
 
 static uint8_t humidity_integer,    humidity_decimal;
@@ -42,6 +43,7 @@ int main(void)
 
     sei();
     printf("SEP4 IoT Hardware\n");
+    tone_play_startup();
 
     if (button_get(2))
         interactive_demo();
@@ -56,6 +58,7 @@ int main(void)
         dht11_get(&humidity_integer,    &humidity_decimal,
                   &temperature_integer, &temperature_decimal);
 
+        /*  Invert light: 0 = dark, 1023 = bright                     */
         light_raw   = light_measure_raw();
         light_value = 1023 - light_raw;
 
