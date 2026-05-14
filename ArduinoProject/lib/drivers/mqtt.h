@@ -25,7 +25,7 @@ uint8_t mqtt_raw_publish(const char *payload);
 void    mqtt_handle_incoming(void);
 void    mqtt_send_ping(void);
 uint8_t mqtt_is_connected(void);
-void    mqtt_tick(uint8_t elapsed_seconds);
+void    mqtt_tick(uint16_t elapsed_seconds);
 char   *mqtt_get_device_mac(void);
 
 #endif

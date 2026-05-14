@@ -20,7 +20,7 @@
 static uint8_t humidity_integer,    humidity_decimal;
 static uint8_t temperature_integer, temperature_decimal;
 
-void pir_callback(void) { /* handled via pir_get_state() in loop */ }
+/*  pir_callback is defined in interactive.c                          */
 
 int main(void)
 {
@@ -56,9 +56,6 @@ int main(void)
         dht11_get(&humidity_integer,    &humidity_decimal,
                   &temperature_integer, &temperature_decimal);
 
-        /*  Light sensor (KY-018) is a photoresistor wired as a voltage
-            divider — raw ADC value rises as light decreases (darker =
-            higher number).  Invert so 0 = dark, 1023 = bright.       */
         light_raw   = light_measure_raw();
         light_value = 1023 - light_raw;
 
@@ -90,7 +87,18 @@ int main(void)
                 _delay_ms(1000);
                 mqtt_raw_connect();
             }
-            mqtt_tick(3);
+
+            /*  Wait 5 minutes before the next publish.
+                Loop in 10 s steps so mqtt_tick() can send a PING
+                every 45 s and keep the broker connection alive.
+                mqtt_handle_incoming() catches any commands that
+                arrive during the wait.                               */
+            for (uint16_t s = 0; s < 300; s += 10)
+            {
+                _delay_ms(10000);
+                mqtt_tick(10);
+                mqtt_handle_incoming();
+            }
         }
         else
         {
@@ -98,7 +106,5 @@ int main(void)
             _delay_ms(1000);
             mqtt_raw_connect();
         }
-
-        _delay_ms(3000);
     }
 }

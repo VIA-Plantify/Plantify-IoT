@@ -10,13 +10,6 @@
 #include <string.h>
 #include <stdlib.h>
 
-/*  Plain TCP MQTT to self-hosted Mosquitto on port 1883.
-    Topics are built from the device MAC address at connect time:
-      Publish:   arduino/<mac>/sensors   (sensor JSON every 3 s)
-      Subscribe: arduino/<mac>/commands  (led_on, pump_on_N, etc.)
-    Credentials (MQTT_USERNAME / MQTT_PASSWORD) are sent in the
-    CONNECT packet so only authorised clients can use the broker.     */
-
 static uint8_t  _mqtt_connected     = 0;
 static uint16_t _seconds_since_ping = 0;
 
@@ -29,9 +22,6 @@ static char _sub_topic[64]  = {0};
 
 char *mqtt_get_device_mac(void) { return _device_mac; }
 
-/* ------------------------------------------------------------------ */
-/*  RX callback — fires when a complete +IPD frame arrives            */
-/* ------------------------------------------------------------------ */
 static void tcp_rx_callback(void)
 {
     _rx_ready = 1;
@@ -40,9 +30,6 @@ static void tcp_rx_callback(void)
 /* ------------------------------------------------------------------ */
 /*  MQTT packet builders                                               */
 /* ------------------------------------------------------------------ */
-
-/*  CONNECT with username + password.
-    Connect flags 0xC2 = clean-session + username + password.        */
 static uint8_t mqtt_build_connect(uint8_t *buf, uint8_t buf_size,
                                   const char *client_id,
                                   const char *username,
@@ -61,10 +48,10 @@ static uint8_t mqtt_build_connect(uint8_t *buf, uint8_t buf_size,
     buf[i++] = 0x00;
     buf[i++] = 0x04;
     buf[i++] = 'M'; buf[i++] = 'Q'; buf[i++] = 'T'; buf[i++] = 'T';
-    buf[i++] = 0x04;        /* MQTT 3.1.1                             */
-    buf[i++] = 0xC2;        /* clean-session + username + password    */
+    buf[i++] = 0x04;
+    buf[i++] = 0xC2;
     buf[i++] = 0x00;
-    buf[i++] = 0x3C;        /* keep-alive 60 s                        */
+    buf[i++] = 0x3C;
     buf[i++] = 0x00; buf[i++] = id_len;
     memcpy(&buf[i], client_id, id_len);   i += id_len;
     buf[i++] = 0x00; buf[i++] = user_len;
@@ -88,7 +75,7 @@ static uint8_t mqtt_build_subscribe(uint8_t *buf, uint8_t buf_size,
     buf[i++] = (uint8_t)(packet_id & 0xFF);
     buf[i++] = 0x00; buf[i++] = topic_len;
     memcpy(&buf[i], topic, topic_len); i += topic_len;
-    buf[i++] = 0x00;        /* QoS 0                                  */
+    buf[i++] = 0x00;
     return i;
 }
 
@@ -118,25 +105,29 @@ static uint8_t mqtt_build_pingreq(uint8_t *buf)
 /* ------------------------------------------------------------------ */
 /*  Connect                                                             */
 /* ------------------------------------------------------------------ */
-
 uint8_t mqtt_raw_connect(void)
 {
     uint8_t pkt[128];
     uint8_t pkt_len;
     _mqtt_connected = 0;
 
-    /* 1. ESP init */
+    _delay_ms(2000);
+
     printf("Starting WiFi...\n");
-    if (wifi_command_AT() != WIFI_OK)
+    uint8_t at_ok = 0;
+    for (uint8_t i = 0; i < 5; i++)
     {
-        printf("ESP not responding.\n");
-        return 0;
+        if (wifi_command_AT() == WIFI_OK) { at_ok = 1; break; }
+        printf("AT retry %d\n", i + 1);
+        _delay_ms(1000);
     }
+    if (!at_ok) { printf("ESP not responding.\n"); return 0; }
+    printf("ESP OK\n");
+
     wifi_command_disable_echo();
     wifi_command_set_mode_to_1();
     _delay_ms(500);
 
-    /* 2. Join WiFi */
     printf("Joining WiFi...\n");
     if (wifi_command_join_AP(WIFI_SSID, WIFI_PASSWORD) != WIFI_OK)
     {
@@ -145,27 +136,20 @@ uint8_t mqtt_raw_connect(void)
     }
     _delay_ms(3000);
 
-    /* 3. Fetch MAC — mandatory, used to build unique topics */
     _device_mac[0] = '\0';
     if (wifi_command_get_mac(_device_mac) != WIFI_OK || _device_mac[0] == '\0')
     {
         _delay_ms(1000);
         wifi_command_get_mac(_device_mac);
     }
-    if (_device_mac[0] == '\0')
-    {
-        printf("MAC unavailable - aborting.\n");
-        return 0;
-    }
+    if (_device_mac[0] == '\0') { printf("MAC unavailable.\n"); return 0; }
     printf("MAC: %s\n", _device_mac);
 
-    /* Build topics from MAC */
     snprintf(_pub_topic, sizeof(_pub_topic), "arduino/%s/sensors",  _device_mac);
     snprintf(_sub_topic, sizeof(_sub_topic), "arduino/%s/commands", _device_mac);
     printf("Pub: %s\n", _pub_topic);
     printf("Sub: %s\n", _sub_topic);
 
-    /* Build unique client ID: plantpot_<mac no colons> */
     char client_id[32];
     char clean_mac[13] = {0};
     uint8_t j = 0;
@@ -175,7 +159,6 @@ uint8_t mqtt_raw_connect(void)
     snprintf(client_id, sizeof(client_id), "plantpot_%s", clean_mac);
     printf("Client ID: %s\n", client_id);
 
-    /* 4. Open plain TCP to Mosquitto broker */
     printf("TCP connecting to %s:%u...\n", MQTT_BROKER_HOST, MQTT_BROKER_PORT);
     _rx_buf[0] = '\0';
     _rx_ready  = 0;
@@ -193,13 +176,8 @@ uint8_t mqtt_raw_connect(void)
         }
         _delay_ms(2000);
     }
-    if (!tcp_ok)
-    {
-        printf("TCP failed.\n");
-        return 0;
-    }
+    if (!tcp_ok) { printf("TCP failed.\n"); return 0; }
 
-    /* 5. Send MQTT CONNECT with credentials */
     pkt_len = mqtt_build_connect(pkt, sizeof(pkt), client_id,
                                  MQTT_USERNAME, MQTT_PASSWORD);
     if (!pkt_len) { printf("CONNECT build failed.\n"); return 0; }
@@ -209,16 +187,14 @@ uint8_t mqtt_raw_connect(void)
     printf("Sending MQTT CONNECT...\n");
     wifi_command_TCP_transmit(pkt, pkt_len);
 
-    /* Wait for CONNACK */
     for (uint16_t i = 0; i < 500; i++) { _delay_ms(10); if (_rx_ready) break; }
 
-    if (!_rx_ready)         { printf("CONNACK timeout.\n");           return 0; }
-    if (_rx_buf[0] != 0x20) { printf("Not a CONNACK.\n");             return 0; }
+    if (!_rx_ready)         { printf("CONNACK timeout.\n");                  return 0; }
+    if (_rx_buf[0] != 0x20) { printf("Not a CONNACK.\n");                    return 0; }
     if (_rx_buf[3] != 0x00) { printf("CONNACK rejected: 0x%02X\n",
-                                      (uint8_t)_rx_buf[3]);           return 0; }
+                                      (uint8_t)_rx_buf[3]);                  return 0; }
     printf("CONNACK OK\n");
 
-    /* 6. Subscribe to commands topic */
     _rx_ready  = 0;
     _rx_buf[0] = '\0';
     pkt_len = mqtt_build_subscribe(pkt, sizeof(pkt), _sub_topic, 1);
@@ -245,7 +221,6 @@ uint8_t mqtt_raw_connect(void)
 /* ------------------------------------------------------------------ */
 /*  Publish                                                             */
 /* ------------------------------------------------------------------ */
-
 uint8_t mqtt_raw_publish(const char *payload)
 {
     uint8_t pkt[198];
@@ -264,7 +239,6 @@ uint8_t mqtt_raw_publish(const char *payload)
 /* ------------------------------------------------------------------ */
 /*  Handle incoming commands                                            */
 /* ------------------------------------------------------------------ */
-
 void mqtt_handle_incoming(void)
 {
     if (!_rx_ready) return;
@@ -305,7 +279,6 @@ void mqtt_handle_incoming(void)
 /* ------------------------------------------------------------------ */
 /*  Ping / keepalive                                                    */
 /* ------------------------------------------------------------------ */
-
 void mqtt_send_ping(void)
 {
     uint8_t ping[2];
@@ -315,7 +288,7 @@ void mqtt_send_ping(void)
 
 uint8_t mqtt_is_connected(void) { return _mqtt_connected; }
 
-void mqtt_tick(uint8_t elapsed_seconds)
+void mqtt_tick(uint16_t elapsed_seconds)
 {
     _seconds_since_ping += elapsed_seconds;
     if (_seconds_since_ping >= PING_INTERVAL_S)
