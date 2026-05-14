@@ -1,3 +1,4 @@
+#include "dht11.h"
 #include <avr/io.h>
 #include <avr/interrupt.h>
 #include <stddef.h>

@@ -1,17 +1,5 @@
 /****************************************************************************
  * interactive.c
- * Complete fixed replacement for the interactive demo.
- *
- * Changes from original:
- * - Added <stdbool.h>
- * - Fixed unsafe input handling (removed gets)
- * - Fixed callback shared flags with volatile
- * - Fixed WiFi TCP callback to match driver signature
- * - Added MQTT helper flow using ESP-AT + Mosquitto broker on laptop
- * - Kept menu structure compatible with the existing project
- * - MQTT broker IP is now prompted at runtime (not hardcoded)
- * - MQTT uses anonymous auth (no username/password)
- *   NOTE: requires allow_anonymous true in mosquitto.conf until pwfile is set up
  ****************************************************************************/
 #include <avr/io.h>
 #include <util/delay.h>
@@ -37,15 +25,14 @@
 #include "tone.h"
 
 #define MAX_STRING_LENGTH 100
-#define MAX_MENU_OPTIONS  15
+#define MAX_MENU_OPTIONS 15
 
 #define MQTT_DEFAULT_BROKER_PORT 1883
-#define MQTT_DEFAULT_CLIENT_ID   "mega2560_client"
-#define MQTT_DEFAULT_TOPIC       "iot/mega/sensors"
+#define MQTT_DEFAULT_CLIENT_ID "mega2560_client"
+#define MQTT_DEFAULT_TOPIC "iot/mega/sensors"
 
-/* Default WiFi credentials (same as main.c) */
-#define WIFI_DEFAULT_SSID        "Ricky"
-#define WIFI_DEFAULT_PASSWORD    "r89uuios"
+#define WIFI_DEFAULT_SSID "Ricky"
+#define WIFI_DEFAULT_PASSWORD "r89uuios"
 
 static int x = 0;
 static char _q_buff[5] = {0};
@@ -56,17 +43,20 @@ static char _tcp_rx_buffer[MAX_STRING_LENGTH] = {0};
 static char _line_buffer1[MAX_STRING_LENGTH] = {0};
 static char _line_buffer2[MAX_STRING_LENGTH] = {0};
 
-/* Broker IP is now entered at runtime instead of hardcoded */
 static char _broker_ip[MAX_STRING_LENGTH] = {0};
-
 static char _mqtt_topic[MAX_STRING_LENGTH] = MQTT_DEFAULT_TOPIC;
-static char _mqtt_client_id[40] = MQTT_DEFAULT_CLIENT_ID;
 
 static const char welcome_text[] = "Welcome from SEP4 IoT hardware!\n";
 
 /* -------------------------------------------------------------------------
  * UART helpers
  * ------------------------------------------------------------------------- */
+
+/*
+ * Poll with a small delay so the UART RX interrupt has time to fill the
+ * ring-buffer between checks.  Without the delay the AVR spins so fast
+ * that gets_nonblocking() always returns 0.
+ */
 static void _read_line_from_uart(char *buffer, uint8_t max_length)
 {
     while (1)
@@ -77,11 +67,13 @@ static void _read_line_from_uart(char *buffer, uint8_t max_length)
             buffer[strcspn(buffer, "\r\n")] = '\0';
             return;
         }
+        _delay_ms(10); /* <-- KEY FIX: yield to UART ISR */
     }
 }
 
 static bool _quit(void)
 {
+    _delay_ms(10); /* same reason as above */
     return (gets_nonblocking(_q_buff, sizeof(_q_buff)) > 0 && _q_buff[0] == 'q');
 }
 
@@ -99,8 +91,7 @@ static WIFI_ERROR_MESSAGE_t mqtt_send_command(const char *cmd, uint16_t timeout_
     size_t len = strlen(cmd);
     if (len > 150)
     {
-        printf("MQTT command too long (%u chars). Shorten topic or client ID.\n",
-               (unsigned)len);
+        printf("MQTT command too long (%u chars).\n", (unsigned)len);
         return WIFI_FAIL;
     }
     return wifi_command(cmd, timeout_s);
@@ -110,18 +101,15 @@ static uint8_t mqtt_prepare_wifi(void)
 {
     if (wifi_command_AT() != WIFI_OK)
     {
-        printf("ESP8266 is not responding.\n");
+        printf("ESP8266 not responding.\n");
         return 0;
     }
-
     wifi_command_disable_echo();
-
     if (wifi_command_set_mode_to_1() != WIFI_OK)
     {
         printf("Failed to set WiFi station mode.\n");
         return 0;
     }
-
     return 1;
 }
 
@@ -131,14 +119,8 @@ static uint8_t mqtt_configure_and_connect(const char *broker_ip,
 {
     char cmd[160];
 
-    /*
-     * Anonymous auth: username and password fields are empty strings.
-     * Requires allow_anonymous true in mosquitto.conf.
-     * To add credentials later, replace the two \"\" with \"user\" \"pass\".
-     */
     snprintf(cmd, sizeof(cmd),
-             "AT+MQTTUSERCFG=0,1,\"%s\",\"\",\"\",0,0,\"\"",
-             client_id);
+             "AT+MQTTUSERCFG=0,1,\"%s\",\"\",\"\",0,0,\"\"", client_id);
     printf("Sending: %s\n", cmd);
     if (mqtt_send_command(cmd, 5) != WIFI_OK)
     {
@@ -147,16 +129,14 @@ static uint8_t mqtt_configure_and_connect(const char *broker_ip,
     }
 
     snprintf(cmd, sizeof(cmd),
-             "AT+MQTTCONN=0,\"%s\",%u,0",
-             broker_ip, broker_port);
+             "AT+MQTTCONN=0,\"%s\",%u,0", broker_ip, broker_port);
     printf("Sending: %s\n", cmd);
     if (mqtt_send_command(cmd, 15) != WIFI_OK)
     {
         printf("MQTT broker connection failed.\n");
-        printf("Check: broker IP correct? mosquitto running? allow_anonymous true?\n");
+        printf("Check: IP correct? mosquitto running? allow_anonymous true?\n");
         return 0;
     }
-
     return 1;
 }
 
@@ -166,51 +146,38 @@ static uint8_t mqtt_publish_text(const char *topic, const char *payload)
 
     if (strchr(payload, '"') != NULL)
     {
-        printf("Payload contains double quotes. Use plain text or CSV.\n");
+        printf("Payload contains double quotes — use plain text.\n");
         return 0;
     }
-
     snprintf(cmd, sizeof(cmd),
-             "AT+MQTTPUB=0,\"%s\",\"%s\",0,0",
-             topic, payload);
-
+             "AT+MQTTPUB=0,\"%s\",\"%s\",0,0", topic, payload);
     printf("Sending: %s\n", cmd);
     if (mqtt_send_command(cmd, 5) != WIFI_OK)
     {
         printf("MQTT publish failed.\n");
         return 0;
     }
-
     return 1;
 }
 
 static void mqtt_publish_sensor_snapshot(void)
 {
-    uint8_t humidity_integer = 0, humidity_decimal = 0;
-    uint8_t temperature_integer = 0, temperature_decimal = 0;
-    uint16_t light_value = 0;
-    uint16_t soil_value = 0;
-    uint16_t distance_mm = 0;
-    uint8_t motion = 0;
+    uint8_t hi = 0, hd = 0, ti = 0, td = 0;
     char payload[96];
 
-    if (dht11_get(&humidity_integer, &humidity_decimal,
-                  &temperature_integer, &temperature_decimal) != DHT11_OK)
+    if (dht11_get(&hi, &hd, &ti, &td) != DHT11_OK)
     {
         printf("DHT11 read failed.\n");
         return;
     }
 
-    light_value  = light_measure_raw();
-    soil_value   = soil_measure_raw(ADC_PK0);
-    distance_mm  = proximity_measure();
-    motion       = (pir_get_state() != PIR_NO_MOTION) ? 1U : 0U;
-
     snprintf(payload, sizeof(payload),
              "temp=%u.%u,hum=%u.%u,light=%u,soil=%u,dist=%u,motion=%u",
-             temperature_integer, temperature_decimal,
-             humidity_integer, humidity_decimal,
-             light_value, soil_value, distance_mm, motion);
+             ti, td, hi, hd,
+             light_measure_raw(),
+             soil_measure_raw(ADC_PK0),
+             proximity_measure(),
+             (pir_get_state() != PIR_NO_MOTION) ? 1U : 0U);
 
     printf("Publishing: %s\n", payload);
     mqtt_publish_text(_mqtt_topic, payload);
@@ -225,7 +192,7 @@ uint8_t menu(void)
     char line[16];
     char *endptr;
 
-    printf("\t----------------- M E N U ------------------\n");
+    printf("\n\t----------------- M E N U ------------------\n");
     printf("\t 1. Button and LED\n");
     printf("\t 2. PIR Sensor (HC-SR501)\n");
     printf("\t 3. Display\n");
@@ -252,8 +219,7 @@ uint8_t menu(void)
         if (line[0] == '\0' || endptr == line || *endptr != '\0' ||
             choice < 1 || choice > MAX_MENU_OPTIONS)
         {
-            printf("Invalid input. Please enter a number between 1 and %d.\n",
-                   MAX_MENU_OPTIONS);
+            printf("Invalid input. Enter a number 1-%d.\n", MAX_MENU_OPTIONS);
             choice = 0;
         }
     } while (choice < 1 || choice > MAX_MENU_OPTIONS);
@@ -301,13 +267,15 @@ int interactive_demo(void)
 {
     static int led2_timer_id = 0;
 
+    printf("\n--- Interactive demo started. ---\n");
+
     while (1)
     {
         switch (menu())
         {
         case 1:
-            printf("Button and LED driver. Type 'q' to exit.\n");
-            printf("LED 4 will blink. Push a button to light one of the other LEDs.\n");
+            printf("Button and LED. Type 'q' to exit.\n");
+            printf("LED 4 blinks. Push buttons 1-3 to light LEDs 1-3.\n");
             led_blink(4, 500);
             do
             {
@@ -324,8 +292,8 @@ int interactive_demo(void)
 
         case 2:
             _pir_active = true;
-            printf("PIR sensor driver. Type 'q' to exit.\n");
-            printf("LED 1 should turn on when motion is detected.\n");
+            printf("PIR sensor. Type 'q' to exit.\n");
+            printf("LED 1 lights when motion detected.\n");
             do
             {
                 _delay_ms(200);
@@ -335,8 +303,7 @@ int interactive_demo(void)
             break;
 
         case 3:
-            printf("Display driver. Type 'q' to exit with reset/menu restart.\n");
-            printf("Type a number between -999 and 9999:\n");
+            printf("Display driver. Enter a number (-999 to 9999). Non-number exits.\n");
             while (scanf("%d", &x) == 1)
             {
                 display_setDecimals(1);
@@ -349,35 +316,30 @@ int interactive_demo(void)
         case 4:
         {
             WIFI_ERROR_MESSAGE_t message;
-
-            printf("WiFi TCP demo. Type values and the board will send them to TCP port 23.\n");
+            printf("WiFi TCP demo (port 23). Type 'q' to exit.\n");
             _prompt_line("Enter WiFi SSID: ", _line_buffer1, sizeof(_line_buffer1));
             _prompt_line("Enter WiFi password: ", _line_buffer2, sizeof(_line_buffer2));
 
             if (!mqtt_prepare_wifi())
                 break;
-
             if (wifi_command_join_AP(_line_buffer1, _line_buffer2) != WIFI_OK)
             {
-                printf("Failed to join WiFi network.\n");
+                printf("Failed to join WiFi.\n");
                 break;
             }
-            printf("Successfully joined WiFi network.\n");
-
-            _prompt_line("Enter IP address of TCP server: ", _line_buffer1, sizeof(_line_buffer1));
+            printf("WiFi joined.\n");
+            _prompt_line("Enter TCP server IP: ", _line_buffer1, sizeof(_line_buffer1));
 
             _tcp_rx_buffer[0] = '\0';
-            message = wifi_command_create_TCP_connection(_line_buffer1,
-                                                         23,
-                                                         wifi_line_callback,
-                                                         _tcp_rx_buffer);
+            message = wifi_command_create_TCP_connection(
+                _line_buffer1, 23,
+                wifi_line_callback, _tcp_rx_buffer);
             if (message != WIFI_OK)
             {
-                printf("Failed to create TCP connection. Error=%d\n", message);
+                printf("TCP connection failed. Error=%d\n", message);
                 break;
             }
-
-            printf("Successfully created TCP connection. Type 'q' to stop.\n");
+            printf("TCP connected. Type 'q' to stop.\n");
             wifi_command_TCP_transmit((uint8_t *)welcome_text, strlen(welcome_text));
 
             while (1)
@@ -388,7 +350,6 @@ int interactive_demo(void)
                     _tcp_rx_buffer[0] = '\0';
                     _tcp_string_received = false;
                 }
-
                 if (gets_nonblocking(_line_buffer2, sizeof(_line_buffer2)) > 0)
                 {
                     _line_buffer2[strcspn(_line_buffer2, "\r\n")] = '\0';
@@ -409,7 +370,7 @@ int interactive_demo(void)
         case 5:
         {
             int ch;
-            printf("stdio driver. Type a text to echo to the terminal.\n");
+            printf("stdio echo. Type a line.\n");
             do
             {
                 ch = getchar();
@@ -420,8 +381,7 @@ int interactive_demo(void)
         }
 
         case 6:
-            printf("Timer driver demo. Type 'q' to exit.\n");
-            printf("LED 2 will toggle every 100ms. Press button 2 to pause/resume.\n");
+            printf("Timer demo. 'q' exits. Button 2 pauses/resumes.\n");
             led2_timer_id = timer_create_sw(led2_callback, 100);
             if (led2_timer_id < 0)
             {
@@ -442,7 +402,7 @@ int interactive_demo(void)
             break;
 
         case 7:
-            printf("Buzzer driver demo. Press button 2 to hear a beep. Type 'q' to exit.\n");
+            printf("Buzzer demo. Button 2 beeps. 'q' exits.\n");
             do
             {
                 if (button_get(2))
@@ -454,39 +414,27 @@ int interactive_demo(void)
             break;
 
         case 8:
-            printf("DHT11 driver demo. Type 'q' to exit.\n");
-            printf("Temperature and humidity will be printed every 2 seconds.\n");
+            printf("DHT11 demo. 'q' exits.\n");
             do
             {
-                uint8_t humidity_integer, humidity_decimal;
-                uint8_t temperature_integer, temperature_decimal;
-                DHT11_ERROR_MESSAGE_t error = dht11_get(
-                    &humidity_integer, &humidity_decimal,
-                    &temperature_integer, &temperature_decimal);
-                if (error == DHT11_OK)
-                {
-                    printf("Temperature: %u.%u C, Humidity: %u.%u %%\n",
-                           temperature_integer, temperature_decimal,
-                           humidity_integer, humidity_decimal);
-                }
+                uint8_t hi, hd, ti, td;
+                if (dht11_get(&hi, &hd, &ti, &td) == DHT11_OK)
+                    printf("Temp: %u.%u C  Humidity: %u.%u %%\n", ti, td, hi, hd);
                 else
-                {
-                    printf("Failed to read DHT11 sensor data.\n");
-                }
+                    printf("DHT11 read failed.\n");
                 _delay_ms(2000);
             } while (!_quit());
             break;
 
         case 9:
-            printf("Proximity sensor driver demo. Type 'q' to exit.\n");
-            printf("Distance in mm will be printed every 2 seconds.\n");
+            printf("Proximity demo. 'q' exits.\n");
             do
             {
-                uint16_t distance = proximity_measure();
-                if (distance == UINT16_MAX)
-                    printf("Proximity timeout. No object detected within range.\n");
+                uint16_t d = proximity_measure();
+                if (d == UINT16_MAX)
+                    printf("No object in range.\n");
                 else
-                    printf("Distance: %u mm\n", distance);
+                    printf("Distance: %u mm\n", d);
                 _delay_ms(2000);
             } while (!_quit());
             break;
@@ -494,17 +442,17 @@ int interactive_demo(void)
         case 10:
         {
             int angle;
-            printf("Servo motor driver demo. Enter angle (-90 to 90).\n");
+            printf("Servo demo. Enter angle -90 to 90. Non-number exits.\n");
             servo_start();
             while (scanf("%d", &angle) == 1)
             {
                 if (angle < -90 || angle > 90)
-                    printf("Invalid angle. Please enter a value between -90 and 90.\n");
+                    printf("Out of range.\n");
                 else
                 {
                     servo_setAngle(PWM_A, (int8_t)angle);
                     servo_setAngle(PWM_B, (int8_t)angle);
-                    printf("Servo set to %d degrees.\n", angle);
+                    printf("Servo -> %d deg\n", angle);
                 }
             }
             servo_stop();
@@ -513,63 +461,58 @@ int interactive_demo(void)
         }
 
         case 11:
-            printf("Light sensor driver demo. Type 'q' to exit.\n");
+            printf("Light sensor demo. 'q' exits.\n");
             do
             {
-                uint16_t light_level = light_measure_raw();
-                if (light_level == UINT16_MAX)
-                    printf("Failed to read light sensor.\n");
+                uint16_t lv = light_measure_raw();
+                if (lv == UINT16_MAX)
+                    printf("Light sensor read failed.\n");
                 else
-                    printf("Light level: %u (0-1023)\n", light_level);
+                    printf("Light: %u / 1023\n", lv);
                 _delay_ms(2000);
             } while (!_quit());
             break;
 
         case 12:
-            printf("Soil moisture sensor driver demo. Type 'q' to exit.\n");
+            printf("Soil moisture demo. 'q' exits.\n");
             do
             {
-                uint16_t soil_moisture = soil_measure_raw(ADC_PK0);
-                if (soil_moisture == UINT16_MAX)
-                    printf("Failed to read soil moisture sensor.\n");
+                uint16_t sv = soil_measure_raw(ADC_PK0);
+                if (sv == UINT16_MAX)
+                    printf("Soil sensor read failed.\n");
                 else
-                    printf("Soil moisture level: %u (0-1023)\n", soil_moisture);
+                    printf("Soil: %u / 1023\n", sv);
                 _delay_ms(2000);
             } while (!_quit());
             break;
 
         case 13:
-            printf("Playing Star Wars theme on the speaker. Reset to interrupt.\n");
-            tone_play_starwars();
+            printf("Playing Star Wars theme. Reset to interrupt.\n");
+            tone_play_startup();
+            _delay_ms(2000);
+            tone_play_air_raid();
+            _delay_ms(2000);
+            tone_play_smoke_detector();
             break;
 
         case 14:
         {
             char payload[80];
+            printf("MQTT demo | SSID: %s | Port: %u | Topic: %s\n",
+                   WIFI_DEFAULT_SSID, MQTT_DEFAULT_BROKER_PORT, MQTT_DEFAULT_TOPIC);
+            printf("Requires: allow_anonymous true in mosquitto.conf\n\n");
 
-            printf("MQTT demo\n");
-            printf("WiFi SSID: %s\n", WIFI_DEFAULT_SSID);
-            printf("Broker port: %u\n", MQTT_DEFAULT_BROKER_PORT);
-            printf("Topic: %s\n", MQTT_DEFAULT_TOPIC);
-            printf("Auth: anonymous (ensure allow_anonymous true in mosquitto.conf)\n\n");
-
-            /* Prompt for broker IP at runtime */
-            _prompt_line("Enter broker IP (your laptop's LAN IP, e.g. 192.168.x.x): ",
-                         _broker_ip, sizeof(_broker_ip));
+            _prompt_line("Broker IP (e.g. 192.168.x.x): ", _broker_ip, sizeof(_broker_ip));
             if (_broker_ip[0] == '\0')
             {
-                printf("No IP entered. Aborting.\n");
+                printf("No IP. Aborting.\n");
                 break;
             }
-            printf("Broker: %s:%u\n", _broker_ip, MQTT_DEFAULT_BROKER_PORT);
-            printf("To subscribe, run:\n");
-            printf("  mosquitto_sub -h %s -t '#'\n\n", _broker_ip);
 
-            /* Prepare WiFi */
+            printf("To subscribe: mosquitto_sub -h %s -t '#'\n\n", _broker_ip);
+
             if (!mqtt_prepare_wifi())
                 break;
-
-            /* Connect to WiFi */
             if (wifi_command_join_AP(WIFI_DEFAULT_SSID, WIFI_DEFAULT_PASSWORD) != WIFI_OK)
             {
                 printf("WiFi join failed.\n");
@@ -577,20 +520,16 @@ int interactive_demo(void)
             }
             printf("WiFi connected.\n");
 
-            /* Connect to MQTT broker (anonymous) */
             if (!mqtt_configure_and_connect(_broker_ip,
                                             MQTT_DEFAULT_BROKER_PORT,
                                             MQTT_DEFAULT_CLIENT_ID))
                 break;
 
-            printf("MQTT connected!\n");
-            printf("1 = send custom text, 2 = send sensor snapshot\n");
+            printf("MQTT connected!\n1 = custom text  2 = sensor snapshot\n");
             _prompt_line("Choose: ", _line_buffer1, sizeof(_line_buffer1));
 
             if (_line_buffer1[0] == '2')
-            {
                 mqtt_publish_sensor_snapshot();
-            }
             else
             {
                 _prompt_line("Message (no double quotes): ", payload, sizeof(payload));
@@ -602,16 +541,14 @@ int interactive_demo(void)
         }
 
         case 15:
-        {
-            printf("Checking ESP8266 firmware version...\n");
+            printf("ESP8266 firmware version:\n");
             wifi_command_AT();
             wifi_command_disable_echo();
             wifi_command("AT+GMR", 5);
             break;
-        }
 
         default:
-            printf("Error: Invalid selection.\n");
+            printf("Invalid selection.\n");
             break;
         }
     }

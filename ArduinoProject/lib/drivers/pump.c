@@ -28,7 +28,7 @@ void pump_run_for(uint32_t miliseconds)
 {
     pump_on();
     uint32_t elapsed = 0;
-    while (elapsed < milliseconds)
+    while (elapsed < miliseconds)
     {
         _delay_ms(100);
         elapsed += 100;
