@@ -191,15 +191,17 @@ def run_serial(port, baud, writer, fh):
                 mins      = int(remaining // 60)
                 secs      = int(remaining % 60)
 
-                # Always show live reading in terminal
-                print(
-                    f"  [live]    T={row['temperature_c']}C  "
-                    f"H={row['humidity_pct']}%  "
-                    f"Light={row['light_raw']}  "
-                    f"Soil={row['soil_pct']}%  "
-                    f"Dist={row['distance_mm']}mm  "
-                    f"| next CSV save in {mins}m {secs:02d}s"
-                )
+                # Show live reading in terminal every 60 seconds
+                if not hasattr(run_serial, '_last_print') or now - run_serial._last_print >= 60:
+                    print(
+                        f"  [live]    T={row['temperature_c']}C  "
+                        f"H={row['humidity_pct']}%  "
+                        f"Light={row['light_raw']}  "
+                        f"Soil={row['soil_pct']}%  "
+                        f"Dist={row['distance_mm']}mm  "
+                        f"| next CSV save in {mins}m {secs:02d}s"
+                    )
+                    run_serial._last_print = now
 
                 # Write to CSV only every 20 minutes
                 if elapsed >= CSV_INTERVAL_S:
