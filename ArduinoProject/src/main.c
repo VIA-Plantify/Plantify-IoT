@@ -18,10 +18,8 @@
 #include "tone.h"
 #include "interactive.h"
 
-static uint8_t humidity_integer,    humidity_decimal;
+static uint8_t humidity_integer, humidity_decimal;
 static uint8_t temperature_integer, temperature_decimal;
-
-/*  pir_callback is defined in interactive.c                          */
 
 int main(void)
 {
@@ -42,6 +40,7 @@ int main(void)
     }
 
     sei();
+
     printf("SEP4 IoT Hardware\n");
     tone_play_startup();
 
@@ -52,41 +51,50 @@ int main(void)
 
     while (1)
     {
-        uint16_t light_raw, light_value, soil_value, distance_mm;
-        char     payload[128];
+        uint16_t light_raw;
+        uint16_t light_value;
+        uint16_t soil_value;
+        uint16_t distance_mm;
+        uint16_t water_level;
 
-        dht11_get(&humidity_integer,    &humidity_decimal,
+        char payload[160];
+
+        dht11_get(&humidity_integer, &humidity_decimal,
                   &temperature_integer, &temperature_decimal);
 
-        /*  Invert light: 0 = dark, 1023 = bright                     */
-        light_raw   = light_measure_raw();
+        light_raw = light_measure_raw();
         light_value = 1023 - light_raw;
 
-        soil_value  = soil_measure_percentage(ADC_PK0);
+        soil_value = soil_measure_percentage(ADC_PK0);
+
         distance_mm = proximity_measure();
 
-        printf("T:%u.%uC H:%u.%u%% L:%u S:%u D:%u\n",
+        water_level =
+            proximity_calculate_water_level_percent(distance_mm);
+
+        printf("T:%u.%uC H:%u.%u%% L:%u S:%u D:%u W:%u%%\n",
                temperature_integer, temperature_decimal,
-               humidity_integer,    humidity_decimal,
-               light_value, soil_value, distance_mm);
+               humidity_integer, humidity_decimal,
+               light_value, soil_value, distance_mm, water_level);
 
         display_int((temperature_integer * 10) + temperature_decimal);
+
         mqtt_handle_incoming();
 
         if (mqtt_is_connected())
         {
             snprintf(payload, sizeof(payload),
                      "{\"mac\":\"%s\",\"temp\":%u.%u,\"hum\":%u.%u,"
-                     "\"light\":%u,\"soil\":%u,\"dist\":%u}",
+                     "\"light\":%u,\"soil\":%u,\"dist\":%u,"
+                     "\"waterLevel\":%u}",
                      mqtt_get_device_mac(),
                      temperature_integer, temperature_decimal,
-                     humidity_integer,    humidity_decimal,
-                     light_value, soil_value, distance_mm);
+                     humidity_integer, humidity_decimal,
+                     light_value, soil_value, distance_mm,
+                     water_level);
 
-            /*  Retry publish up to 3 times.
-                On each failure reconnect before retrying so the
-                same payload is sent once the connection is back.     */
             uint8_t published = 0;
+
             for (uint8_t attempt = 0; attempt < 3; attempt++)
             {
                 if (mqtt_raw_publish(payload))
@@ -94,8 +102,10 @@ int main(void)
                     published = 1;
                     break;
                 }
+
                 printf("Publish failed (attempt %d). Reconnecting...\n",
                        attempt + 1);
+
                 wifi_command_close_TCP_connection();
                 _delay_ms(1000);
                 mqtt_raw_connect();
@@ -104,11 +114,6 @@ int main(void)
             if (!published)
                 printf("Publish failed after 3 attempts. Skipping.\n");
 
-            /*  Wait 5 minutes before the next publish.
-                Loop in 10 s steps so mqtt_tick() can send a PING
-                every 45 s and keep the broker connection alive.
-                mqtt_handle_incoming() catches any commands that
-                arrive during the wait.                               */
             for (uint16_t s = 0; s < 300; s += 10)
             {
                 _delay_ms(10000);
