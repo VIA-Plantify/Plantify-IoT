@@ -19,3 +19,4 @@ uint16_t proximity_measure();
 // Get the last measured distance in mm. Returns UINT16_MAX if the last measurement timed out.
 uint16_t proximity_get_distance();
 
+uint16_t proximity_calculate_water_level_percent(uint16_t distance_mm);

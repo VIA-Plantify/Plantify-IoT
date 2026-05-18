@@ -1,0 +1,42 @@
+name: PlatformIO CI
+
+on:
+  push:
+    branches:
+      - "main"
+      - "development"
+      - "feature/**"
+      - "fix/**"
+      - "hotfix/**"
+  pull_request:
+    branches:
+      - "main"
+      - "development"
+      - "feature/**"
+      - "fix/**"
+      - "hotfix/**"
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+
+    - name: Install PlatformIO
+      run: pip install platformio
+
+    - name: Build firmware
+      run: |
+        cd ArduinoProject
+        pio run --environment megaatmega2560
+
+    - name: Run tests (native)
+      run: |
+        cd ArduinoProject
+        pio test --environment native
