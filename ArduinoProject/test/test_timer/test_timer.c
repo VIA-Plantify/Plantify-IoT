@@ -1,5 +1,6 @@
 #include "timer.h"
 #include <stddef.h>
+#include <unity.h>
 
 void setUp(void) {
     // This is run before EACH test

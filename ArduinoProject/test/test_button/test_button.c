@@ -1,4 +1,5 @@
 #include "button.h"
+#include <unity.h>
 
 void setUp(void) {
     button_init();
