@@ -2,9 +2,19 @@ name: PlatformIO CI
 
 on:
   push:
-    branches: [ "main", "development" ]
+    branches:
+      - "main"
+      - "development"
+      - "feature/**"
+      - "fix/**"
+      - "hotfix/**"
   pull_request:
-    branches: [ "main", "development" ]
+    branches:
+      - "main"
+      - "development"
+      - "feature/**"
+      - "fix/**"
+      - "hotfix/**"
 
 jobs:
   build:
@@ -26,7 +36,7 @@ jobs:
         cd ArduinoProject
         pio run --environment megaatmega2560
 
-    - name: Run tests
+    - name: Run tests (native)
       run: |
         cd ArduinoProject
         pio test --environment native
