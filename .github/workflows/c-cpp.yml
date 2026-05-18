@@ -24,9 +24,9 @@ jobs:
     - name: Build firmware
       run: |
         cd ArduinoProject
-        pio run
+        pio run --environment megaatmega2560
 
     - name: Run tests
       run: |
         cd ArduinoProject
-        pio test --environment megaatmega2560
+        pio test --environment native
