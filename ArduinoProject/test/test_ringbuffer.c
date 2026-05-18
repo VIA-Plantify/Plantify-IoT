@@ -1,4 +1,3 @@
-#include "unity.h"
 #include "ringbuffer.h"
 
 #define TEST_CAPACITY 4
