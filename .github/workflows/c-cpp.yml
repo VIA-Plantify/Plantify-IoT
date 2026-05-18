@@ -1,4 +1,4 @@
-name: C/C++ CI
+name: PlatformIO CI
 
 on:
   push:
@@ -8,16 +8,25 @@ on:
 
 jobs:
   build:
-
     runs-on: ubuntu-latest
 
     steps:
     - uses: actions/checkout@v4
-    - name: configure
-      run: ./configure
-    - name: make
-      run: make
-    - name: make check
-      run: make check
-    - name: make distcheck
-      run: make distcheck
+
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+
+    - name: Install PlatformIO
+      run: pip install platformio
+
+    - name: Build firmware
+      run: |
+        cd ArduinoProject
+        pio run
+
+    - name: Run tests
+      run: |
+        cd ArduinoProject
+        pio test --environment megaatmega2560
