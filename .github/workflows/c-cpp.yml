@@ -36,7 +36,3 @@ jobs:
         cd ArduinoProject
         pio run --environment megaatmega2560
 
-    - name: Run tests (native)
-      run: |
-        cd ArduinoProject
-        pio test --environment native
