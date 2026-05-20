@@ -1,5 +1,5 @@
-#include "unity.h"
 #include "ringbuffer.h"
+#include <unity.h>
 
 #define TEST_CAPACITY 4
 #define TEST_ELEM_SIZE sizeof(int)
