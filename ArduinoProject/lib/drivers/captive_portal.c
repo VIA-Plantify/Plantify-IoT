@@ -8,12 +8,12 @@
 #include <string.h>
 #include "uart.h"
 
-#define PORTAL_SSID    "PlantPot-Setup"
+#define PORTAL_SSID "PlantPot-Setup"
 #define PORTAL_RX_SIZE 768
 
-static char             portal_rx_buf[PORTAL_RX_SIZE];
+static char portal_rx_buf[PORTAL_RX_SIZE];
 static volatile uint8_t portal_rx_ready = 0;
-static uint8_t          waiting_for_body = 0;
+static uint8_t waiting_for_body = 0;
 
 static void close_connection(void);
 
@@ -31,7 +31,7 @@ void software_reset(void)
 
 static void parse_body(char *body)
 {
-    char ssid[32]     = {0};
+    char ssid[32] = {0};
     char password[64] = {0};
 
     printf_P(PSTR("Parsing body: '%s'\n"), body);
@@ -108,29 +108,35 @@ static void parse_body(char *body)
 
 static void send_html(void)
 {
-    static char response[400];
+    /* Send in two chunks — wifi buffer is only 128 bytes.
+       Chunk 1: HTTP headers + start of body
+       Chunk 2: rest of body                              */
+    uint8_t conn = wifi_get_last_conn_id();
 
-    static const char body[] =
-        "<html><body>"
-        "<h2>Plant Pot</h2>"
-        "<form method='POST' action='/save'>"
-        "SSID:<input name='ssid'><br>"
-        "Pass:<input name='pass' type='password'><br>"
-        "<input type='submit' value='Connect'>"
+    static const char chunk1[] =
+        "HTTP/1.1 200 OK\r\n"
+        "Content-Type: text/html\r\n"
+        "Content-Length: 195\r\n"
+        "Connection: close\r\n"
+        "\r\n"
+        "<html><body><h2>Plant Pot</h2>"
+        "<form method=\'POST\' action=\'/save\'>"
+        "SSID:<input name=\'ssid\'><br>";
+
+    static const char chunk2[] =
+        "Pass:<input name=\'pass\' type=\'password\'><br>"
+        "<input type=\'submit\' value=\'Connect\'>"
         "</form></body></html>";
 
-    uint16_t body_len = strlen(body);
-    uint16_t pos = snprintf(response, sizeof(response),
-                            "HTTP/1.1 200 OK\r\n"
-                            "Content-Type: text/html\r\n"
-                            "Content-Length: %u\r\n"
-                            "\r\n"
-                            "%s",
-                            body_len, body);
+    printf_P(PSTR("Sending chunk1 (%u) to conn %d\n"),
+             (uint16_t)strlen(chunk1), conn);
+    wifi_command_TCP_server_transmit(conn, (uint8_t *)chunk1, strlen(chunk1));
+    _delay_ms(200);
 
-    printf_P(PSTR("Sending %u bytes to conn %d\n"), pos, wifi_get_last_conn_id());
-    wifi_command_TCP_server_transmit(
-        wifi_get_last_conn_id(), (uint8_t *)response, pos);
+    printf_P(PSTR("Sending chunk2 (%u) to conn %d\n"),
+             (uint16_t)strlen(chunk2), conn);
+    wifi_command_TCP_server_transmit(conn, (uint8_t *)chunk2, strlen(chunk2));
+    _delay_ms(200);
 }
 
 static void close_connection(void)
@@ -146,36 +152,32 @@ void start_captive_portal(void)
 {
     printf_P(PSTR("Starting portal...\n"));
 
-    printf_P(PSTR("AT...\n"));
-    printf_P(PSTR("AT=%d\n"), wifi_command_AT());
+    /* Close any open connections without resetting ESP */
+    wifi_command("AT+CIPCLOSE=0", 2);
+    wifi_command("AT+CIPCLOSE=1", 2);
+    wifi_command("AT+CIPSERVER=0", 2);
+    _delay_ms(500);
 
-    printf_P(PSTR("ATE0...\n"));
-    printf_P(PSTR("ATE0=%d\n"), wifi_command_disable_echo());
-
-    printf_P(PSTR("AUTOCONN=0...\n"));
-    printf_P(PSTR("AUTOCONN=%d\n"), wifi_command("AT+CWAUTOCONN=0", 2));
-
-    printf_P(PSTR("CWQAP...\n"));
-    printf_P(PSTR("CWQAP=%d\n"), wifi_command("AT+CWQAP", 2));
+    wifi_command_AT();
+    wifi_command_disable_echo();
+    wifi_command("AT+CWAUTOCONN=0", 2);
+    wifi_command("AT+CWQAP", 2);
     _delay_ms(500);
 
     printf_P(PSTR("CWMODE=3...\n"));
-    printf_P(PSTR("CWMODE=%d\n"), wifi_command("AT+CWMODE=3", 3));
+    wifi_command("AT+CWMODE=3", 3);
     _delay_ms(2000);
 
-    printf_P(PSTR("CWDHCP...\n"));
-    printf_P(PSTR("CWDHCP=%d\n"), wifi_command("AT+CWDHCP=1,1", 2));
-
-    printf_P(PSTR("CIPMUX...\n"));
-    printf_P(PSTR("CIPMUX=%d\n"), wifi_command("AT+CIPMUX=1", 2));
-
-    printf_P(PSTR("CIPSERVER=0...\n"));
-    printf_P(PSTR("CIPSERVER0=%d\n"), wifi_command("AT+CIPSERVER=0", 2));
-    _delay_ms(500);
+    wifi_command("AT+CWDHCP=1,1", 2);
+    wifi_command("AT+CIPMUX=1", 2);
 
     printf_P(PSTR("CWSAP...\n"));
-    uart_send_string_blocking(UART2_ID, "AT+CWSAP=\"PlantPot-Setup\",\"\",5,0\r\n");
+    uart_send_string_blocking(UART2_ID, "AT+CWSAP=\"PlantPot-Setup\",,\"\",5,0\r\n");
     _delay_ms(3000);
+
+    printf_P(PSTR("Opening port 80...\n"));
+    wifi_command("AT+CIPSERVER=1,80", 5);
+    _delay_ms(500);
 
     printf_P(PSTR("TCP server...\n"));
     wifi_command_start_TCP_server(portal_rx_callback, portal_rx_buf, PORTAL_RX_SIZE);
@@ -184,7 +186,7 @@ void start_captive_portal(void)
     printf_P(PSTR("Portal running - connect to '%s'\n"), PORTAL_SSID);
     printf_P(PSTR("Open browser: http://192.168.4.1\n"));
 
-    portal_rx_ready  = 0;
+    portal_rx_ready = 0;
     waiting_for_body = 0;
 
     while (1)
@@ -193,33 +195,24 @@ void start_captive_portal(void)
         {
             portal_rx_ready = 0;
             printf_P(PSTR("Request received\n"));
+            printf_P(PSTR("Buf: '%.60s'\n"), portal_rx_buf);
 
-            if (waiting_for_body)
+            /* Always check for ssid= first — body may arrive in any packet */
+            if (strstr(portal_rx_buf, "ssid=") != NULL)
             {
-                if (strstr(portal_rx_buf, "ssid=") != NULL)
-                {
-                    waiting_for_body = 0;
-                    printf_P(PSTR("Found body: '%s'\n"), portal_rx_buf);
-                    parse_body(portal_rx_buf);
-                }
-                else
-                {
-                    printf_P(PSTR("Still waiting for body...\n"));
-                }
+                char *body = strstr(portal_rx_buf, "ssid=");
+                waiting_for_body = 0;
+                printf_P(PSTR("Parsing credentials...\n"));
+                parse_body(body);
             }
             else if (strstr(portal_rx_buf, "POST /save") != NULL)
             {
-                if (strstr(portal_rx_buf, "ssid=") != NULL)
-                {
-                    char *body = strstr(portal_rx_buf, "ssid=");
-                    printf_P(PSTR("Body in same packet\n"));
-                    parse_body(body);
-                }
-                else
-                {
-                    printf_P(PSTR("Waiting for body...\n"));
-                    waiting_for_body = 1;
-                }
+                printf_P(PSTR("Waiting for body...\n"));
+                waiting_for_body = 1;
+            }
+            else if (portal_rx_buf[0] == '\0')
+            {
+                /* empty packet — ignore */
             }
             else if (strstr(portal_rx_buf, "GET /favicon.ico") != NULL)
             {
@@ -228,7 +221,7 @@ void start_captive_portal(void)
             else if (strstr(portal_rx_buf, "GET /") != NULL)
             {
                 send_html();
-                _delay_ms(500);
+                _delay_ms(1000);
                 close_connection();
             }
 

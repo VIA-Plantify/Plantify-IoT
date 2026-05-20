@@ -149,3 +149,4 @@ uint8_t wifi_get_last_conn_id(void);
 WIFI_ERROR_MESSAGE_t wifi_command_TCP_server_transmit(uint8_t conn_id,
                                                       uint8_t *data,
                                                       uint16_t length);
+WIFI_ERROR_MESSAGE_t wifi_command_get_mac(char *mac_address);
