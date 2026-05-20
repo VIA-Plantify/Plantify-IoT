@@ -164,7 +164,7 @@ int main(void)
         if (mqtt_is_connected())
         {
             /* 5 minute wait with keepalive ticks every 10s */
-            for (uint16_t s = 0; s < 300; s += 10)
+            for (uint16_t s = 0; s < 3600; s += 10)
             {
                 _delay_ms(10000);
                 mqtt_tick(10);
