@@ -1,19 +1,23 @@
+#include "unity.h"
+#include <stddef.h>
 #include "timer.h"
 
-
-void setUp(void) {
+void setUp(void)
+{
     // This is run before EACH test
-    for (int8_t i = 0; i < TIMER_MAX_TIMERS; i++) 
+    for (int8_t i = 0; i < TIMER_MAX_TIMERS; i++)
     {
         timer_delete(i + 1); // Clean up any existing timers
     }
 }
 
-void tearDown(void) {
+void tearDown(void)
+{
     // This is run after EACH test
 }
 
-void test_timer_create_valid(void) {
+void test_timer_create_valid(void)
+{
     int8_t timer_id = timer_create_sw(NULL, 1000);
     TEST_ASSERT_EQUAL(TIMER_ERROR_NO_RESOURCES, timer_id); // Callback is NULL
 
@@ -24,7 +28,8 @@ void test_timer_create_valid(void) {
     TEST_ASSERT(timer_id > 0); // Valid creation
 }
 
-void test_timer_create_invalid_interval(void) {
+void test_timer_create_invalid_interval(void)
+{
     int8_t timer_id = timer_create_sw((void (*)(uint8_t))1, 0);
     TEST_ASSERT_EQUAL(TIMER_ERROR_INVALID_INTERVAL, timer_id); // Invalid interval
 
@@ -32,9 +37,11 @@ void test_timer_create_invalid_interval(void) {
     TEST_ASSERT_EQUAL(TIMER_ERROR_INVALID_INTERVAL, timer_id); // Invalid interval
 }
 
-void test_timer_create_no_resources(void) {
+void test_timer_create_no_resources(void)
+{
     // Create maximum number of timers
-    for (int i = 0; i < TIMER_MAX_TIMERS; i++) {
+    for (int i = 0; i < TIMER_MAX_TIMERS; i++)
+    {
         int8_t timer_id = timer_create_sw((void (*)(uint8_t))1, 1000);
         TEST_ASSERT(timer_id > 0); // Valid creation
     }
@@ -43,7 +50,8 @@ void test_timer_create_no_resources(void) {
     TEST_ASSERT_EQUAL(TIMER_ERROR_NO_RESOURCES, timer_id); // No resources available
 }
 
-void test_timer_state(void) {
+void test_timer_state(void)
+{
     int8_t timer_id = timer_create_sw((void (*)(uint8_t))1, 1000);
     TEST_ASSERT(timer_id > 0); // Valid creation
 
@@ -59,7 +67,8 @@ void test_timer_state(void) {
     TEST_ASSERT_EQUAL(1, state); // Timer should be active again
 }
 
-int main(void) {
+int main(void)
+{
     UNITY_BEGIN();
     // Add test cases here, e.g.:
     RUN_TEST(test_timer_create_valid);
@@ -67,4 +76,4 @@ int main(void) {
     RUN_TEST(test_timer_create_no_resources);
     RUN_TEST(test_timer_state);
     return UNITY_END();
-}   
+}

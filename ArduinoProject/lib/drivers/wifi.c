@@ -289,14 +289,40 @@ WIFI_ERROR_MESSAGE_t wifi_command_create_TCP_connection(char *IP, uint16_t port,
     sprintf(portString, "%u", port);
     strcat(sendbuffer, portString);
 
-    WIFI_ERROR_MESSAGE_t errorMessage = wifi_command(sendbuffer, 20);
-    if (errorMessage != WIFI_OK)
-        return errorMessage;
-    else
-        _callback = wifi_TCP_callback;
+    /* AT+CIPSTART responds with "CONNECT\r\n" + "OK\r\n"
+       wifi_command already checks for OK so this should work,
+       but also accept CONNECT alone as success               */
+    void *cb_state = _callback;
+    _callback = wifi_command_callback;
+
+    uart_send_string_blocking(UART2_ID, strcat(sendbuffer, "\r\n"));
+
+    uint8_t connected = 0;
+    for (uint16_t i = 0; i < 2000; i++)
+    {
+        _delay_ms(10);
+        if (strstr((char *)wifi_dataBuffer, "OK\r\n") != NULL ||
+            strstr((char *)wifi_dataBuffer, "CONNECT\r\n") != NULL)
+        {
+            connected = 1;
+            break;
+        }
+        if (strstr((char *)wifi_dataBuffer, "ERROR") != NULL ||
+            strstr((char *)wifi_dataBuffer, "FAIL") != NULL)
+            break;
+    }
+
+    /* Debug: print what ESP responded */
+    printf("TCP resp: [%.60s]\n", (char *)wifi_dataBuffer);
 
     wifi_clear_databuffer_and_index();
-    return errorMessage;
+
+    if (connected)
+        _callback = wifi_TCP_callback;
+    else
+        _callback = cb_state;
+
+    return connected ? WIFI_OK : WIFI_FAIL;
 }
 
 WIFI_ERROR_MESSAGE_t wifi_command_TCP_transmit(uint8_t *data, uint16_t length)
@@ -315,25 +341,65 @@ WIFI_ERROR_MESSAGE_t wifi_command_TCP_transmit(uint8_t *data, uint16_t length)
     return WIFI_OK;
 }
 
+WIFI_ERROR_MESSAGE_t wifi_command_get_mac(char *mac_address)
+{
+    void *callback_state = _callback;
+    _callback = wifi_command_callback;
+
+    uart_send_string_blocking(UART2_ID, "AT+CIFSR\r\n");
+
+    for (uint16_t i = 0; i < 500; i++)
+    {
+        _delay_ms(10);
+        if (strstr((char *)wifi_dataBuffer, "OK\r\n") != NULL)
+            break;
+    }
+
+    WIFI_ERROR_MESSAGE_t error = WIFI_ERROR_NOT_RECEIVING;
+    if (wifi_dataBufferIndex > 0)
+    {
+        if (strstr((char *)wifi_dataBuffer, "OK") != NULL)
+            error = WIFI_OK;
+        else if (strstr((char *)wifi_dataBuffer, "ERROR") != NULL)
+            error = WIFI_ERROR_RECEIVED_ERROR;
+        else
+            error = WIFI_ERROR_RECEIVING_GARBAGE;
+    }
+
+    if (error == WIFI_OK)
+    {
+        char *macStart = strstr((char *)wifi_dataBuffer, "STAMAC,\"");
+        if (macStart)
+        {
+            macStart += strlen("STAMAC,\"");
+            char *macEnd = strchr(macStart, '"');
+            if (macEnd && (macEnd - macStart) <= 17)
+            {
+                strncpy(mac_address, macStart, macEnd - macStart);
+                mac_address[macEnd - macStart] = '\0';
+            }
+        }
+    }
+
+    wifi_clear_databuffer_and_index();
+    _callback = callback_state;
+    return error;
+}
+
 /* ------------------------------------------------------------------ */
 /*  TCP server support                                                  */
-/*                                                                     */
-/*  The ESP8266 TCP server uses AT+CIPMUX=1 and AT+CIPSERVER.          */
-/*  Incoming data arrives as:  +IPD,<conn_id>,<len>:<data>            */
-/*  Outgoing data uses:        AT+CIPSEND=<conn_id>,<len>             */
 /* ------------------------------------------------------------------ */
 
-static uint8_t _last_conn_id = 0;
+#ifndef IPD_PREFIX
+#define IPD_PREFIX "+IPD,"
+#define PREFIX_LENGTH 5
+#endif
 
+static uint8_t _last_conn_id = 0;
 static WIFI_TCP_Callback_t _server_callback = NULL;
 static char *_server_rx_buf = NULL;
 static uint16_t _server_rx_size = 0;
 
-/*
- * TCP server receive state machine.
- * Parses:  +IPD,<conn_id>,<len>:<data>
- * Stores conn_id so wifi_get_last_conn_id() can return it.
- */
 static void wifi_TCP_server_callback(uint8_t byte)
 {
     static enum { IDLE,
@@ -355,7 +421,6 @@ static void wifi_TCP_server_callback(uint8_t byte)
             prefix_index = 1;
         }
         break;
-
     case MATCH_PREFIX:
         if (byte == IPD_PREFIX[prefix_index])
         {
@@ -373,9 +438,7 @@ static void wifi_TCP_server_callback(uint8_t byte)
             prefix_index = 0;
         }
         break;
-
     case CONN_ID:
-        /* expect  "<digit>,"  */
         if (byte >= '0' && byte <= '9')
             conn_id = byte - '0';
         else if (byte == ',')
@@ -385,11 +448,8 @@ static void wifi_TCP_server_callback(uint8_t byte)
             length = 0;
         }
         else
-        {
             state = IDLE;
-        }
         break;
-
     case LENGTH:
         if (byte >= '0' && byte <= '9')
             length = length * 10 + (byte - '0');
@@ -404,7 +464,6 @@ static void wifi_TCP_server_callback(uint8_t byte)
             length = 0;
         }
         break;
-
     case DATA:
         if (_server_rx_buf && index < (int)_server_rx_size - 1)
             _server_rx_buf[index++] = byte;
@@ -444,12 +503,9 @@ WIFI_ERROR_MESSAGE_t wifi_command_TCP_server_transmit(uint8_t conn_id,
     _callback = wifi_command_callback;
 
     char sendbuffer[32];
-    snprintf(sendbuffer, sizeof(sendbuffer), "AT+CIPSEND=%u,%u\r\n",
-             conn_id, length);
-
+    snprintf(sendbuffer, sizeof(sendbuffer), "AT+CIPSEND=%u,%u\r\n", conn_id, length);
     uart_send_string_blocking(UART2_ID, sendbuffer);
 
-    /* Wait for '> ' prompt */
     uint8_t got_prompt = 0;
     for (uint16_t i = 0; i < 200; i++)
     {
