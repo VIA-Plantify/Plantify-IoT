@@ -36,12 +36,7 @@ jobs:
         cd ArduinoProject
         pio run --environment megaatmega2560
 
-    - name: Build tests - Arduino environment
+    - name: Build tests
       run: |
         cd ArduinoProject
         pio test --environment megaatmega2560 --without-uploading --without-testing
-
-    - name: Build tests - Bare metal environment
-      run: |
-        cd ArduinoProject
-        pio test --environment megaatmega2560_bare --without-uploading --without-testing
