@@ -79,14 +79,11 @@ int main(void)
     led_init();
     led_on(1);
 
-    button_init();
     display_init();
     proximity_init();
     light_init();
     soil_init(ADC_PK0);
-    pir_init(pir_callback);
     wifi_init();
-    servo_init(PWM_NORMAL);
 
     pump_init();
 
