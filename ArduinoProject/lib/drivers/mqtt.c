@@ -2,7 +2,6 @@
 #include "eeprom_storage.h"
 #include "wifi.h"
 #include "led.h"
-#include "buzzer.h"
 #include "tone.h"
 #include "pump.h"
 #include <avr/io.h>
