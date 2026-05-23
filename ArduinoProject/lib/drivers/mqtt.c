@@ -2,7 +2,6 @@
 #include "eeprom_storage.h"
 #include "wifi.h"
 #include "led.h"
-#include "buzzer.h"
 #include "tone.h"
 #include "pump.h"
 #include <avr/io.h>
@@ -390,8 +389,6 @@ void mqtt_handle_incoming(void)
                 led_on(1);
             else if (strcmp(payload_str, "led_off") == 0)
                 led_off(1);
-            else if (strcmp(payload_str, "beep") == 0)
-                buzzer_beep();
             else if (strncmp(payload_str, "pump_on_", 8) == 0)
                 pump_run_for((uint8_t)atoi(&payload_str[8]) * 1000);
             else
