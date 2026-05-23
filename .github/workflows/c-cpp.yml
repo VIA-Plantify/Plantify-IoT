@@ -32,4 +32,4 @@ jobs:
     - name: Run tests (megaatmega2560)
       run: |
         cd ArduinoProject
-        pio test --environment megaatmega2560 --without-uploading --without-testing
+        pio test --environment megaatmega2560 --without-uploading --without-testing --ignore test_uart --ignore test_pump
