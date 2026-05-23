@@ -23,6 +23,7 @@
 #include "eeprom_storage.h"
 #include "captive_portal.h"
 #include "data_server.h"
+#include "pump.h"
 
 static uint8_t humidity_integer, humidity_decimal;
 static uint8_t temperature_integer, temperature_decimal;
@@ -91,6 +92,8 @@ int main(void)
     pir_init(pir_callback);
     wifi_init();
     servo_init(PWM_NORMAL);
+
+    pump_init();
 
     if (UART_OK != uart_stdio_init(115200))
     {
@@ -164,9 +167,9 @@ int main(void)
         if (mqtt_is_connected())
         {
             /* 5 minute wait with keepalive ticks every 10s */
-            for (uint16_t s = 0; s < 300; s += 10)
+            for (uint16_t s = 0; s < 3600; s += 10)
             {
-                _delay_ms(10000);
+                _delay_ms(1000);
                 mqtt_tick(10);
                 mqtt_handle_incoming();
 

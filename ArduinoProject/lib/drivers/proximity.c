@@ -5,12 +5,12 @@
 #include <stdbool.h>
 #include "proximity.h"
 
-#define DDR_Trig  DDRL
-#define P_Trig    PL7
+#define DDR_Trig DDRL
+#define P_Trig PL7
 #define PORT_trig PORTL
 
-#define PIN_Echo  PINL
-#define P_Echo    PL6
+#define PIN_Echo PINL
+#define P_Echo PL6
 
 volatile static bool _timeout = false;
 static uint16_t _last_distance = 0;
@@ -77,23 +77,14 @@ uint16_t proximity_measure()
 
 uint16_t proximity_calculate_water_level_percent(uint16_t distance_mm)
 {
-    const uint16_t min_distance_mm = 5;   // 100% full
-    const uint16_t max_distance_mm = 45;  // 0% empty
+    const uint16_t min_distance_mm = 19; /* 100% full — sensor nearly touching water */
+    const uint16_t max_distance_mm = 61; /* 0% empty — sensor far from water */
 
-    if (distance_mm == UINT16_MAX)
-    {
+    if (distance_mm == UINT16_MAX || distance_mm >= max_distance_mm)
         return 0;
-    }
 
     if (distance_mm <= min_distance_mm)
-    {
         return 100;
-    }
-
-    if (distance_mm >= max_distance_mm)
-    {
-        return 0;
-    }
 
     return ((max_distance_mm - distance_mm) * 100) /
            (max_distance_mm - min_distance_mm);

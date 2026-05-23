@@ -23,9 +23,10 @@
 #include "light.h"
 #include "soil.h"
 #include "tone.h"
+#include "pump.h"
 
 #define MAX_STRING_LENGTH 100
-#define MAX_MENU_OPTIONS 15
+#define MAX_MENU_OPTIONS 16
 
 #define MQTT_DEFAULT_BROKER_PORT 1883
 #define MQTT_DEFAULT_CLIENT_ID "mega2560_client"
@@ -200,7 +201,7 @@ uint8_t menu(void)
     printf("\t 5. stdio\n");
     printf("\t 6. Timer\n");
     printf("\t 7. Buzzer\n");
-    printf("\t 8. Temperature and humidity sensor (DHT11)\n");
+    printf("\t 8. Temperature and humidity sensor (DHT13)\n");
     printf("\t 9. Proximity sensor (HC-SR04)\n");
     printf("\t10. Servo motor (SG90)\n");
     printf("\t11. Light sensor (KY-018)\n");
@@ -208,6 +209,7 @@ uint8_t menu(void)
     printf("\t13. Play Star Wars theme on the speaker\n");
     printf("\t14. Publish a message to MQTT broker\n");
     printf("\t15. Check ESP8266 firmware version\n");
+    printf("\t16. Pump (run for N milliseconds)\n");
 
     do
     {
@@ -546,6 +548,30 @@ int interactive_demo(void)
             wifi_command_disable_echo();
             wifi_command("AT+GMR", 5);
             break;
+
+        case 16:
+        {
+            char ms_buf[16];
+            char *endptr;
+            uint32_t ms;
+
+            printf("Pump demo (PC7). Enter duration in milliseconds (0 cancels).\n");
+            pump_init();
+
+            _prompt_line("Duration (ms): ", ms_buf, sizeof(ms_buf));
+            ms = (uint32_t)strtoul(ms_buf, &endptr, 10);
+
+            if (ms_buf[0] == '\0' || endptr == ms_buf || ms == 0)
+            {
+                printf("Cancelled.\n");
+                break;
+            }
+
+            printf("Pump ON for %lu ms...\n", ms);
+            pump_run_for(ms);
+            printf("Pump OFF. Done.\n");
+            break;
+        }
 
         default:
             printf("Invalid selection.\n");
