@@ -8,21 +8,16 @@
 #include "mqtt.h"
 #include "uart_stdio.h"
 #include "led.h"
-#include "button.h"
 #include "display.h"
 #include "proximity.h"
 #include "light.h"
 #include "soil.h"
-#include "pir.h"
 #include "wifi.h"
-#include "servo.h"
 #include "adc.h"
 #include "dht11.h"
 #include "tone.h"
-#include "interactive.h"
 #include "eeprom_storage.h"
 #include "captive_portal.h"
-#include "data_server.h"
 #include "pump.h"
 
 static uint8_t humidity_integer, humidity_decimal;
@@ -84,14 +79,11 @@ int main(void)
     led_init();
     led_on(1);
 
-    button_init();
     display_init();
     proximity_init();
     light_init();
     soil_init(ADC_PK0);
-    pir_init(pir_callback);
     wifi_init();
-    servo_init(PWM_NORMAL);
 
     pump_init();
 
@@ -107,35 +99,6 @@ int main(void)
     sei();
     printf_P(PSTR("SEP4 IoT Hardware\n"));
 
-    /* Button 1 — wipe credentials + start captive portal */
-    if (button_get(1))
-    {
-        _delay_ms(50);
-        if (button_get(1))
-        {
-            char empty[32] = {0};
-            save_credentials(empty, empty);
-            printf_P(PSTR("Credentials wiped! Starting portal...\n"));
-            _delay_ms(500);
-            start_captive_portal(); /* never returns */
-        }
-    }
-
-    /* Button 2 — interactive driver demo */
-    if (button_get(2))
-    {
-        _delay_ms(50);
-        if (button_get(2))
-            interactive_demo(); /* never returns */
-    }
-
-    /* Button 3 — local TCP data export */
-    if (button_get(3))
-    {
-        _delay_ms(50);
-        if (button_get(3))
-            data_server_run(); /* never returns */
-    }
 
     /* Check EEPROM for saved WiFi credentials */
     char saved_ssid[32] = {0};
