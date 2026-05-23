@@ -96,3 +96,18 @@ DHT11_ERROR_MESSAGE_t dht11_get(uint8_t *humidity_integer, uint8_t *humidity_dec
         return DHT11_FAIL;
     }
 }
+/* Retry wrapper — DHT11 occasionally fails, 3 attempts with 1s gap */
+DHT11_ERROR_MESSAGE_t dht11_get_reliable(uint8_t *humidity_integer, uint8_t *humidity_decimal,
+                                         uint8_t *temperature_integer, uint8_t *temperature_decimal)
+{
+    DHT11_ERROR_MESSAGE_t result;
+    for (uint8_t attempt = 0; attempt < 3; attempt++)
+    {
+        result = dht11_get(humidity_integer, humidity_decimal,
+                           temperature_integer, temperature_decimal);
+        if (result == DHT11_OK)
+            return DHT11_OK;
+        _delay_ms(1000);
+    }
+    return result;
+}
